@@ -1,6 +1,6 @@
 /**
  * Multi-image blending tool
- * Optimized with outputSchema and performance metrics
+ * Optimized with outputSchema, performance metrics, and progress notifications
  */
 
 import {
@@ -11,14 +11,11 @@ import {
 } from "../schemas/index.js";
 import { generateImages } from "../services/seedream.js";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-
-/**
- * Format milliseconds to human-readable string
- */
-function formatTime(ms: number): string {
-  if (ms < 1000) return `${ms}ms`;
-  return `${(ms / 1000).toFixed(1)}s`;
-}
+import {
+  ProgressReporter,
+  ErrorReporter,
+  formatTime,
+} from "../utils/progress.js";
 
 export function registerBlendTool(server: McpServer): void {
   server.registerTool(
@@ -77,8 +74,36 @@ Tips:
         openWorldHint: true,
       },
     },
-    async (params: BlendInput) => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    async (params: BlendInput, extra: any) => {
+      const progress = new ProgressReporter(extra);
+      const errorReporter = new ErrorReporter();
+
+      errorReporter.addContext("prompt", params.prompt.slice(0, 100));
+      errorReporter.addContext("imageCount", params.images.length);
+      errorReporter.addContext("strength", params.strength);
+
+      progress.setStages([
+        "Loading source images",
+        "Encoding images",
+        "Calling SeeDream API",
+        "Blending images (30-60s)",
+        "Downloading result",
+        "Formatting response",
+      ]);
+
       try {
+        await progress.nextStage(`Loading ${params.images.length} source images...`);
+        errorReporter.recordStage("Input validation");
+
+        await progress.nextStage("Encoding images for API...");
+        errorReporter.recordStage("Image encoding");
+
+        await progress.nextStage("Connecting to SeeDream API...");
+        errorReporter.recordStage("API connection");
+
+        await progress.nextStage(`Blending ${params.images.length} images (this may take 30-60 seconds)...`);
+
         const result = await generateImages(
         {
           prompt: params.prompt,
@@ -92,16 +117,19 @@ Tips:
       );
 
       if (!result.success) {
+        errorReporter.recordFailedStage("Image blending");
+        errorReporter.addContext("apiError", result.error);
+
         return {
-          content: [
-            {
-              type: "text",
-              text: `Error blending images: ${result.error}`,
-            },
-          ],
+          content: [{ type: "text", text: errorReporter.formatError(new Error(result.error || "Unknown error"), "seedream_blend") }],
+          structuredContent: errorReporter.formatErrorJson(new Error(result.error || "Unknown error"), "seedream_blend"),
           isError: true,
         };
       }
+
+      errorReporter.recordStage("Image blending");
+      await progress.nextStage("Processing result...");
+      await progress.complete("Images blended successfully");
 
       const output = {
         success: true,
@@ -160,15 +188,10 @@ Tips:
         structuredContent: output,
       };
       } catch (error) {
-        const errorMessage = error instanceof Error ? error.message : String(error);
-        const errorStack = error instanceof Error ? error.stack : undefined;
+        errorReporter.recordFailedStage("Unexpected error");
         return {
-          content: [
-            {
-              type: "text",
-              text: `Error blending images: ${errorMessage}\n\nStack trace:\n${errorStack || 'N/A'}`,
-            },
-          ],
+          content: [{ type: "text", text: errorReporter.formatError(error, "seedream_blend") }],
+          structuredContent: errorReporter.formatErrorJson(error, "seedream_blend"),
           isError: true,
         };
       }

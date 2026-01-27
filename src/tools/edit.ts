@@ -1,6 +1,6 @@
 /**
  * Image-to-Image editing tool
- * Optimized with outputSchema and performance metrics
+ * Optimized with outputSchema, performance metrics, and progress notifications
  */
 
 import {
@@ -11,14 +11,11 @@ import {
 } from "../schemas/index.js";
 import { generateImages } from "../services/seedream.js";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-
-/**
- * Format milliseconds to human-readable string
- */
-function formatTime(ms: number): string {
-  if (ms < 1000) return `${ms}ms`;
-  return `${(ms / 1000).toFixed(1)}s`;
-}
+import {
+  ProgressReporter,
+  ErrorReporter,
+  formatTime,
+} from "../utils/progress.js";
 
 export function registerEditTool(server: McpServer): void {
   server.registerTool(
@@ -74,8 +71,32 @@ Examples:
         openWorldHint: true,
       },
     },
-    async (params: EditInput) => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    async (params: EditInput, extra: any) => {
+      const progress = new ProgressReporter(extra);
+      const errorReporter = new ErrorReporter();
+
+      errorReporter.addContext("prompt", params.prompt.slice(0, 100));
+      errorReporter.addContext("sourceImage", params.image.slice(0, 100));
+      errorReporter.addContext("strength", params.strength);
+
+      progress.setStages([
+        "Loading source image",
+        "Calling SeeDream API",
+        "Editing image (20-40s)",
+        "Downloading result",
+        "Formatting response",
+      ]);
+
       try {
+        await progress.nextStage("Loading and validating source image...");
+        errorReporter.recordStage("Input validation");
+
+        await progress.nextStage("Connecting to SeeDream API...");
+        errorReporter.recordStage("API connection");
+
+        await progress.nextStage("Editing image (this may take 20-40 seconds)...");
+
         const result = await generateImages(
         {
           prompt: params.prompt,
@@ -89,16 +110,19 @@ Examples:
       );
 
       if (!result.success) {
+        errorReporter.recordFailedStage("Image editing");
+        errorReporter.addContext("apiError", result.error);
+
         return {
-          content: [
-            {
-              type: "text",
-              text: `Error editing image: ${result.error}`,
-            },
-          ],
+          content: [{ type: "text", text: errorReporter.formatError(new Error(result.error || "Unknown error"), "seedream_edit") }],
+          structuredContent: errorReporter.formatErrorJson(new Error(result.error || "Unknown error"), "seedream_edit"),
           isError: true,
         };
       }
+
+      errorReporter.recordStage("Image editing");
+      await progress.nextStage("Processing result...");
+      await progress.complete("Image edited successfully");
 
       const output = {
         success: true,
@@ -149,15 +173,10 @@ Examples:
         structuredContent: output,
       };
       } catch (error) {
-        const errorMessage = error instanceof Error ? error.message : String(error);
-        const errorStack = error instanceof Error ? error.stack : undefined;
+        errorReporter.recordFailedStage("Unexpected error");
         return {
-          content: [
-            {
-              type: "text",
-              text: `Error editing image: ${errorMessage}\n\nStack trace:\n${errorStack || 'N/A'}`,
-            },
-          ],
+          content: [{ type: "text", text: errorReporter.formatError(error, "seedream_edit") }],
+          structuredContent: errorReporter.formatErrorJson(error, "seedream_edit"),
           isError: true,
         };
       }

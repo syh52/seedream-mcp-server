@@ -1,6 +1,6 @@
 /**
  * Text-to-Image generation tool
- * Optimized with outputSchema and performance metrics
+ * Optimized with outputSchema, performance metrics, and progress notifications
  */
 
 import {
@@ -11,14 +11,11 @@ import {
 } from "../schemas/index.js";
 import { generateImages } from "../services/seedream.js";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-
-/**
- * Format milliseconds to human-readable string
- */
-function formatTime(ms: number): string {
-  if (ms < 1000) return `${ms}ms`;
-  return `${(ms / 1000).toFixed(1)}s`;
-}
+import {
+  ProgressReporter,
+  ErrorReporter,
+  formatTime,
+} from "../utils/progress.js";
 
 export function registerGenerateTool(server: McpServer): void {
   server.registerTool(
@@ -68,8 +65,39 @@ Tips:
         openWorldHint: true,
       },
     },
-    async (params: GenerateInput) => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    async (params: GenerateInput, extra: any) => {
+      // Initialize progress and error reporters
+      const progress = new ProgressReporter(extra);
+      const errorReporter = new ErrorReporter();
+
+      // Add context for error reporting
+      errorReporter.addContext("prompt", params.prompt.slice(0, 100) + (params.prompt.length > 100 ? "..." : ""));
+      errorReporter.addContext("size", params.size);
+      errorReporter.addContext("download", params.download);
+
+      // Define operation stages
+      progress.setStages([
+        "Validating input",
+        "Calling SeeDream API",
+        "Generating images (30-60s)",
+        "Downloading images",
+        "Syncing to Firebase",
+        "Formatting response",
+      ]);
+
       try {
+        // Stage 1: Validating input
+        await progress.nextStage("Validating input parameters...");
+        errorReporter.recordStage("Input validation");
+
+        // Stage 2: Calling API
+        await progress.nextStage("Connecting to SeeDream API...");
+        errorReporter.recordStage("API connection initiated");
+
+        // Stage 3: Generating (this is where most time is spent)
+        await progress.nextStage("Generating images (this may take 30-60 seconds)...");
+
         const result = await generateImages(
           {
             prompt: params.prompt,
@@ -81,16 +109,34 @@ Tips:
         );
 
         if (!result.success) {
+          errorReporter.recordFailedStage("Image generation");
+          errorReporter.addContext("apiError", result.error);
+
+          const errorText = errorReporter.formatError(
+            new Error(result.error || "Unknown generation error"),
+            "seedream_generate"
+          );
+
           return {
-            content: [
-              {
-                type: "text",
-                text: `Error generating image: ${result.error}`,
-              },
-            ],
+            content: [{ type: "text", text: errorText }],
+            structuredContent: errorReporter.formatErrorJson(
+              new Error(result.error || "Unknown generation error"),
+              "seedream_generate"
+            ),
             isError: true,
           };
         }
+
+        errorReporter.recordStage("Image generation");
+        errorReporter.addContext("imagesGenerated", result.images.length);
+
+        // Stage 4-5: Download and Firebase sync are handled in generateImages
+        await progress.nextStage("Processing images...");
+        errorReporter.recordStage("Image processing");
+
+        // Stage 6: Formatting response
+        await progress.nextStage("Formatting response...");
+        await progress.complete(`Generated ${result.images.length} images successfully`);
 
       // Format output with timing
       const output = {
@@ -149,15 +195,15 @@ Tips:
         structuredContent: output,
       };
       } catch (error) {
-        const errorMessage = error instanceof Error ? error.message : String(error);
-        const errorStack = error instanceof Error ? error.stack : undefined;
+        // Record failure and format detailed error
+        errorReporter.recordFailedStage("Unexpected error");
+
+        const errorText = errorReporter.formatError(error, "seedream_generate");
+        const errorJson = errorReporter.formatErrorJson(error, "seedream_generate");
+
         return {
-          content: [
-            {
-              type: "text",
-              text: `Error generating image: ${errorMessage}\n\nStack trace:\n${errorStack || 'N/A'}`,
-            },
-          ],
+          content: [{ type: "text", text: errorText }],
+          structuredContent: errorJson,
           isError: true,
         };
       }

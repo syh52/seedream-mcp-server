@@ -1,6 +1,6 @@
 /**
  * Batch variation generation tool
- * Optimized with outputSchema and performance metrics
+ * Optimized with outputSchema, performance metrics, and progress notifications
  */
 
 import {
@@ -11,14 +11,11 @@ import {
 } from "../schemas/index.js";
 import { generateImages } from "../services/seedream.js";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-
-/**
- * Format milliseconds to human-readable string
- */
-function formatTime(ms: number): string {
-  if (ms < 1000) return `${ms}ms`;
-  return `${(ms / 1000).toFixed(1)}s`;
-}
+import {
+  ProgressReporter,
+  ErrorReporter,
+  formatTime,
+} from "../utils/progress.js";
 
 export function registerVariationsTool(server: McpServer): void {
   server.registerTool(
@@ -73,8 +70,32 @@ Tips:
         openWorldHint: true,
       },
     },
-    async (params: VariationsInput) => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    async (params: VariationsInput, extra: any) => {
+      const progress = new ProgressReporter(extra);
+      const errorReporter = new ErrorReporter();
+
+      errorReporter.addContext("prompt", params.prompt.slice(0, 100));
+      errorReporter.addContext("count", params.count);
+      errorReporter.addContext("hasBaseImage", !!params.base_image);
+
+      progress.setStages([
+        "Validating parameters",
+        "Calling SeeDream API",
+        `Generating ${params.count} variations (30-90s)`,
+        "Downloading images",
+        "Formatting response",
+      ]);
+
       try {
+        await progress.nextStage("Validating input parameters...");
+        errorReporter.recordStage("Input validation");
+
+        await progress.nextStage("Connecting to SeeDream API...");
+        errorReporter.recordStage("API connection");
+
+        await progress.nextStage(`Generating ${params.count} variations (this may take 30-90 seconds)...`);
+
         const result = await generateImages(
         {
           prompt: params.prompt,
@@ -88,16 +109,19 @@ Tips:
       );
 
       if (!result.success) {
+        errorReporter.recordFailedStage("Variation generation");
+        errorReporter.addContext("apiError", result.error);
+
         return {
-          content: [
-            {
-              type: "text",
-              text: `Error generating variations: ${result.error}`,
-            },
-          ],
+          content: [{ type: "text", text: errorReporter.formatError(new Error(result.error || "Unknown error"), "seedream_variations") }],
+          structuredContent: errorReporter.formatErrorJson(new Error(result.error || "Unknown error"), "seedream_variations"),
           isError: true,
         };
       }
+
+      errorReporter.recordStage("Variation generation");
+      await progress.nextStage("Processing results...");
+      await progress.complete(`Generated ${result.images.length} variations successfully`);
 
       const output = {
         success: true,
@@ -163,15 +187,10 @@ Tips:
         structuredContent: output,
       };
       } catch (error) {
-        const errorMessage = error instanceof Error ? error.message : String(error);
-        const errorStack = error instanceof Error ? error.stack : undefined;
+        errorReporter.recordFailedStage("Unexpected error");
         return {
-          content: [
-            {
-              type: "text",
-              text: `Error generating variations: ${errorMessage}\n\nStack trace:\n${errorStack || 'N/A'}`,
-            },
-          ],
+          content: [{ type: "text", text: errorReporter.formatError(error, "seedream_variations") }],
+          structuredContent: errorReporter.formatErrorJson(error, "seedream_variations"),
           isError: true,
         };
       }
