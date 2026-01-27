@@ -42,7 +42,10 @@ import { registerVariationsTool } from "./tools/variations.js";
 import { registerStatusTool } from "./tools/status.js";
 
 // Server version
-const SERVER_VERSION = "1.1.0";
+const SERVER_VERSION = "1.2.0";
+
+// MCP Protocol version for Claude.ai compatibility
+const MCP_PROTOCOL_VERSION = "2024-11-05";
 
 // Create MCP server instance
 const server = new McpServer({
@@ -69,18 +72,100 @@ async function runStdio(): Promise<void> {
 
 /**
  * Run server with HTTP transport (remote server mode)
+ * Supports both Claude Code (/mcp) and Claude.ai (/) endpoints
  */
 async function runHttp(): Promise<void> {
   const app = express();
   app.use(express.json({ limit: "50mb" })); // Allow large base64 images
 
-  // CORS for browser clients
+  // CORS for browser clients (including Claude.ai)
   app.use((_req, res, next) => {
     res.header("Access-Control-Allow-Origin", "*");
-    res.header("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-    res.header("Access-Control-Allow-Headers", "Content-Type, Authorization");
+    res.header("Access-Control-Allow-Methods", "GET, POST, HEAD, OPTIONS, DELETE");
+    res.header("Access-Control-Allow-Headers", "Content-Type, Authorization, Accept, Mcp-Session-Id");
+    res.header("Access-Control-Expose-Headers", "Mcp-Session-Id, MCP-Protocol-Version");
     next();
   });
+
+  // Store active transports for session management
+  const sessions = new Map<string, StreamableHTTPServerTransport>();
+
+  // MCP handler - shared between / and /mcp endpoints
+  async function handleMcpRequest(req: Request, res: Response) {
+    try {
+      // Check for existing session
+      const sessionId = req.headers["mcp-session-id"] as string | undefined;
+      let transport: StreamableHTTPServerTransport;
+
+      if (sessionId && sessions.has(sessionId)) {
+        // Reuse existing transport for session
+        transport = sessions.get(sessionId)!;
+      } else {
+        // Generate new session ID
+        const newSessionId = `session-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+
+        // Create new transport with session support
+        transport = new StreamableHTTPServerTransport({
+          sessionIdGenerator: () => newSessionId,
+          enableJsonResponse: true,
+        });
+
+        // Store session
+        sessions.set(newSessionId, transport);
+
+        // Clean up session after 30 minutes of inactivity
+        setTimeout(() => {
+          sessions.delete(newSessionId);
+          transport.close();
+        }, 30 * 60 * 1000);
+
+        res.on("close", () => {
+          // Don't close if it's a session-based connection
+          if (!sessionId) {
+            // Keep session alive for potential reconnection
+          }
+        });
+
+        await server.connect(transport);
+      }
+
+      await transport.handleRequest(req, res, req.body);
+    } catch (error) {
+      console.error("MCP request error:", error);
+      if (!res.headersSent) {
+        res.status(500).json({ error: "Internal server error" });
+      }
+    }
+  }
+
+  // HEAD request for MCP protocol version (Claude.ai requirement)
+  app.head("/", (_req: Request, res: Response) => {
+    res.header("MCP-Protocol-Version", MCP_PROTOCOL_VERSION);
+    res.status(200).end();
+  });
+
+  app.head("/mcp", (_req: Request, res: Response) => {
+    res.header("MCP-Protocol-Version", MCP_PROTOCOL_VERSION);
+    res.status(200).end();
+  });
+
+  // DELETE for session cleanup
+  app.delete("/", (req: Request, res: Response) => {
+    const sessionId = req.headers["mcp-session-id"] as string | undefined;
+    if (sessionId && sessions.has(sessionId)) {
+      sessions.get(sessionId)?.close();
+      sessions.delete(sessionId);
+      res.status(200).json({ message: "Session closed" });
+    } else {
+      res.status(404).json({ error: "Session not found" });
+    }
+  });
+
+  // Root path for Claude.ai compatibility
+  app.post("/", handleMcpRequest);
+
+  // Legacy /mcp path for Claude Code compatibility
+  app.post("/mcp", handleMcpRequest);
 
   // Health check endpoint
   app.get("/health", (_req: Request, res: Response) => {
@@ -88,38 +173,23 @@ async function runHttp(): Promise<void> {
       status: "ok",
       server: "seedream-mcp-server",
       version: SERVER_VERSION,
+      mcpProtocolVersion: MCP_PROTOCOL_VERSION,
       apiKeyConfigured: !!process.env.ARK_API_KEY,
+      activeSessions: sessions.size,
     });
   });
 
-  // MCP endpoint - stateless JSON request/response
-  app.post("/mcp", async (req: Request, res: Response) => {
-    try {
-      // Create new transport for each request (stateless)
-      const transport = new StreamableHTTPServerTransport({
-        sessionIdGenerator: undefined,
-        enableJsonResponse: true,
-      });
-
-      res.on("close", () => transport.close());
-
-      await server.connect(transport);
-      await transport.handleRequest(req, res, req.body);
-    } catch (error) {
-      console.error("MCP request error:", error);
-      res.status(500).json({ error: "Internal server error" });
-    }
-  });
-
-  // Info endpoint
-  app.get("/", (_req: Request, res: Response) => {
+  // Info endpoint (moved to /info)
+  app.get("/info", (_req: Request, res: Response) => {
     res.json({
       name: "SeeDream MCP Server",
       description: "Generate images via natural language using SeeDream 4.5",
       version: SERVER_VERSION,
+      mcpProtocolVersion: MCP_PROTOCOL_VERSION,
       endpoints: {
-        mcp: "POST /mcp",
+        mcp: "POST / or POST /mcp",
         health: "GET /health",
+        info: "GET /info",
       },
       tools: [
         "seedream_generate - Text to image",
@@ -133,13 +203,28 @@ async function runHttp(): Promise<void> {
     });
   });
 
+  // GET on root - return protocol info for discovery
+  app.get("/", (_req: Request, res: Response) => {
+    res.header("MCP-Protocol-Version", MCP_PROTOCOL_VERSION);
+    res.json({
+      name: "seedream-mcp-server",
+      version: SERVER_VERSION,
+      protocolVersion: MCP_PROTOCOL_VERSION,
+      capabilities: {
+        tools: true,
+      },
+    });
+  });
+
   const port = parseInt(process.env.PORT || "3000", 10);
   app.listen(port, () => {
     console.log(`SeeDream MCP server v${SERVER_VERSION} started (HTTP mode)`);
-    console.log(`  - MCP endpoint: http://localhost:${port}/mcp`);
+    console.log(`  - MCP endpoint: http://localhost:${port}/ (Claude.ai)`);
+    console.log(`  - MCP endpoint: http://localhost:${port}/mcp (Claude Code)`);
     console.log(`  - Health check: http://localhost:${port}/health`);
-    console.log(`  - Server info:  http://localhost:${port}/`);
-    console.log(`  - API Key: ${process.env.ARK_API_KEY ? "configured" : "NOT SET"}`);
+    console.log(`  - Server info:  http://localhost:${port}/info`);
+    console.log(`  - Protocol:     MCP ${MCP_PROTOCOL_VERSION}`);
+    console.log(`  - API Key:      ${process.env.ARK_API_KEY ? "configured" : "NOT SET"}`);
   });
 }
 
