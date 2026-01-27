@@ -87,48 +87,19 @@ async function runHttp(): Promise<void> {
     next();
   });
 
-  // Store active transports for session management
-  const sessions = new Map<string, StreamableHTTPServerTransport>();
-
-  // MCP handler - shared between / and /mcp endpoints
+  // MCP handler - stateless, each request gets a fresh transport
+  // This is the recommended approach for HTTP MCP servers
   async function handleMcpRequest(req: Request, res: Response) {
     try {
-      // Check for existing session
-      const sessionId = req.headers["mcp-session-id"] as string | undefined;
-      let transport: StreamableHTTPServerTransport;
+      // Create new transport for each request (stateless mode)
+      const transport = new StreamableHTTPServerTransport({
+        sessionIdGenerator: undefined, // Stateless - no session tracking
+        enableJsonResponse: true,
+      });
 
-      if (sessionId && sessions.has(sessionId)) {
-        // Reuse existing transport for session
-        transport = sessions.get(sessionId)!;
-      } else {
-        // Generate new session ID
-        const newSessionId = `session-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      res.on("close", () => transport.close());
 
-        // Create new transport with session support
-        transport = new StreamableHTTPServerTransport({
-          sessionIdGenerator: () => newSessionId,
-          enableJsonResponse: true,
-        });
-
-        // Store session
-        sessions.set(newSessionId, transport);
-
-        // Clean up session after 30 minutes of inactivity
-        setTimeout(() => {
-          sessions.delete(newSessionId);
-          transport.close();
-        }, 30 * 60 * 1000);
-
-        res.on("close", () => {
-          // Don't close if it's a session-based connection
-          if (!sessionId) {
-            // Keep session alive for potential reconnection
-          }
-        });
-
-        await server.connect(transport);
-      }
-
+      await server.connect(transport);
       await transport.handleRequest(req, res, req.body);
     } catch (error) {
       console.error("MCP request error:", error);
@@ -149,18 +120,6 @@ async function runHttp(): Promise<void> {
     res.status(200).end();
   });
 
-  // DELETE for session cleanup
-  app.delete("/", (req: Request, res: Response) => {
-    const sessionId = req.headers["mcp-session-id"] as string | undefined;
-    if (sessionId && sessions.has(sessionId)) {
-      sessions.get(sessionId)?.close();
-      sessions.delete(sessionId);
-      res.status(200).json({ message: "Session closed" });
-    } else {
-      res.status(404).json({ error: "Session not found" });
-    }
-  });
-
   // Root path for Claude.ai compatibility
   app.post("/", handleMcpRequest);
 
@@ -175,7 +134,6 @@ async function runHttp(): Promise<void> {
       version: SERVER_VERSION,
       mcpProtocolVersion: MCP_PROTOCOL_VERSION,
       apiKeyConfigured: !!process.env.ARK_API_KEY,
-      activeSessions: sessions.size,
     });
   });
 
