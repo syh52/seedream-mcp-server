@@ -15,11 +15,20 @@ import * as path from "path";
 const STORAGE_BUCKET = "seedream-gallery.firebasestorage.app";
 const IMAGES_COLLECTION = "images";
 
-// MCP public user identity
-const MCP_USER = {
-  userId: "mcp-public",
-  userName: "MCP Generator",
-};
+/**
+ * Get MCP user identity from environment variables
+ * If not configured, falls back to "mcp-public" user
+ *
+ * To sync images to your personal gallery, set these env vars:
+ *   FIREBASE_USER_ID=<your-firebase-uid>
+ *   FIREBASE_USER_NAME=<your-display-name>
+ */
+function getMcpUser(): { userId: string; userName: string } {
+  return {
+    userId: process.env.FIREBASE_USER_ID || "mcp-public",
+    userName: process.env.FIREBASE_USER_NAME || "MCP Generator",
+  };
+}
 
 let firebaseApp: App | null = null;
 
@@ -134,9 +143,10 @@ export async function saveImageToFirestore(data: {
 }): Promise<string> {
   const app = initFirebase();
   const db = getFirestore(app);
+  const mcpUser = getMcpUser();
 
   const docRef = await db.collection(IMAGES_COLLECTION).add({
-    ...MCP_USER,
+    ...mcpUser,
     prompt: data.prompt,
     imageUrl: data.imageUrl,
     originalUrl: data.originalUrl,
@@ -148,6 +158,7 @@ export async function saveImageToFirestore(data: {
     createdAt: FieldValue.serverTimestamp(),
   });
 
+  console.error(`[firebase] Saved for user: ${mcpUser.userId}`);
   return docRef.id;
 }
 

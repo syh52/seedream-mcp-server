@@ -28,6 +28,7 @@ export enum ResponseFormat {
 }
 
 // Base schema for common fields
+// Note: download defaults to true to enable Firebase sync (images are uploaded to Firebase Storage)
 const BaseInputSchema = z.object({
   response_format: z.nativeEnum(ResponseFormat)
     .default(ResponseFormat.MARKDOWN)

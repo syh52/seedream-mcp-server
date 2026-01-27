@@ -20,10 +20,17 @@ npm run dev      # 开发模式（tsx watch）
 npm run build    # TypeScript 编译到 dist/
 npm start        # 运行编译后的服务器
 
-# 环境变量
-ARK_API_KEY="your-key"           # 必需
+# 环境变量（必需）
+ARK_API_KEY="your-key"           # SeeDream API 密钥
+
+# 环境变量（传输模式）
 TRANSPORT="stdio"                 # stdio（默认）或 http
 PORT=3000                         # HTTP 模式端口
+
+# 环境变量（Firebase 同步，可选）
+FIREBASE_SERVICE_ACCOUNT='{"type":"service_account",...}'  # 服务账号 JSON
+FIREBASE_USER_ID="your-uid"       # 你的 Firebase UID
+FIREBASE_USER_NAME="Your Name"    # 显示名称
 ```
 
 ## Architecture
@@ -66,6 +73,50 @@ Tool Handler → Zod 验证 → generateImages() → SeeDream API → 并行下�
 - 每个工具注册到 MCP Server
 - 支持 Markdown 和 JSON 两种输出格式
 - 包含详细的工具描述（作为 LLM 使用指南）
+
+## Firebase 集成
+
+MCP Server 支持自动将生成的图片同步到 Firebase，使其在 Web App 的图库中可见。
+
+### 配置方式
+
+设置以下环境变量启用同步：
+
+```bash
+# 方式 1：JSON 字符串（推荐用于 Railway 等云平台）
+FIREBASE_SERVICE_ACCOUNT='{"type":"service_account","project_id":"seedream-gallery",...}'
+
+# 方式 2：文件路径（本地开发）
+FIREBASE_SERVICE_ACCOUNT_PATH="/path/to/service-account.json"
+
+# 方式 3：标准 GCP 变量
+GOOGLE_APPLICATION_CREDENTIALS="/path/to/service-account.json"
+```
+
+### 用户身份配置
+
+默认情况下，MCP 生成的图片归属于 `mcp-public` 虚拟用户。
+
+要同步到你的个人图库，额外设置：
+
+```bash
+FIREBASE_USER_ID="your-firebase-uid"     # 你的 Firebase UID
+FIREBASE_USER_NAME="Your Display Name"    # 显示名称
+```
+
+### 同步流程
+
+```
+生成图片 → 下载到本地 → 上传 Firebase Storage → 写入 Firestore
+                                ↓
+                    Web App /organize 实时显示
+```
+
+### 注意事项
+
+- 仅下载成功的图片会被同步
+- 图片存储在 `mcp-images/` 路径下
+- 会记录 `source: "mcp"` 标识来源
 
 ## API 最佳实践
 

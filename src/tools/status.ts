@@ -6,6 +6,7 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import * as os from "os";
+import { isFirebaseConfigured } from "../services/firebase.js";
 
 // Input schema - no required parameters
 const StatusInputSchema = z.object({
@@ -20,6 +21,8 @@ type StatusInput = z.infer<typeof StatusInputSchema>;
 const StatusOutputSchema = z.object({
   status: z.enum(["healthy", "degraded", "error"]).describe("Overall server status"),
   api_key_configured: z.boolean().describe("Whether ARK_API_KEY is set"),
+  firebase_configured: z.boolean().describe("Whether Firebase sync is configured"),
+  firebase_user_id: z.string().optional().describe("Firebase user ID for image sync"),
   server_version: z.string().describe("MCP server version"),
   node_version: z.string().describe("Node.js version"),
   uptime_seconds: z.number().describe("Process uptime in seconds"),
@@ -61,6 +64,8 @@ Use when:
     },
     async (params: StatusInput) => {
       const apiKeyConfigured = !!process.env.ARK_API_KEY;
+      const firebaseConfigured = isFirebaseConfigured();
+      const firebaseUserId = process.env.FIREBASE_USER_ID;
       const status = apiKeyConfigured ? "healthy" : "degraded";
 
       const tools = [
@@ -74,7 +79,9 @@ Use when:
       const output: StatusOutput = {
         status,
         api_key_configured: apiKeyConfigured,
-        server_version: "1.0.0",
+        firebase_configured: firebaseConfigured,
+        firebase_user_id: firebaseUserId,
+        server_version: "1.1.0",
         node_version: process.version,
         uptime_seconds: Math.floor(process.uptime()),
         tools_available: tools,
@@ -93,6 +100,7 @@ Use when:
         "",
         `**Status:** ${status === "healthy" ? "✅ Healthy" : "⚠️ Degraded"}`,
         `**API Key:** ${apiKeyConfigured ? "✅ Configured" : "❌ Not set (ARK_API_KEY required)"}`,
+        `**Firebase:** ${firebaseConfigured ? `✅ Configured (User: ${firebaseUserId || "mcp-public"})` : "❌ Not configured"}`,
         "",
         "## Server Info",
         `- Version: ${output.server_version}`,
@@ -111,13 +119,26 @@ Use when:
         lines.push(`- \`${tool}\``);
       }
 
-      if (!apiKeyConfigured) {
+      if (!apiKeyConfigured || !firebaseConfigured) {
         lines.push("");
         lines.push("## ⚠️ Action Required");
-        lines.push("Set your API key to enable image generation:");
-        lines.push("```bash");
-        lines.push('export ARK_API_KEY="your-api-key"');
-        lines.push("```");
+
+        if (!apiKeyConfigured) {
+          lines.push("Set your API key to enable image generation:");
+          lines.push("```bash");
+          lines.push('export ARK_API_KEY="your-api-key"');
+          lines.push("```");
+        }
+
+        if (!firebaseConfigured) {
+          lines.push("");
+          lines.push("Set Firebase credentials to enable image sync to Web App:");
+          lines.push("```bash");
+          lines.push('export FIREBASE_SERVICE_ACCOUNT=\'{"type":"service_account",...}\'');
+          lines.push('export FIREBASE_USER_ID="your-firebase-uid"');
+          lines.push('export FIREBASE_USER_NAME="Your Name"');
+          lines.push("```");
+        }
       }
 
       return {
