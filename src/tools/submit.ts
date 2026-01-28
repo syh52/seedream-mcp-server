@@ -8,7 +8,6 @@ import {
   SubmitInputSchema,
   SubmitInput,
   SubmitOutputSchema,
-  ResponseFormat
 } from "../schemas/index.js";
 import {
   createTaskWithId,
@@ -26,15 +25,12 @@ export function registerSubmitTool(server: McpServer): void {
     "seedream_submit",
     {
       title: "Submit Image Generation Task",
-      description: `Submit an image generation task and get a task ID immediately (no waiting).
+      description: `Submit an image generation task. Returns immediately - images will appear in the Web App.
 
-**USE THIS TOOL ON CLAUDE.AI** - The regular seedream_generate tool may timeout on Claude.ai
-because image generation takes 30-60 seconds. This tool returns immediately.
+**USE THIS TOOL ON CLAUDE.AI** - The regular seedream_generate tool times out on Claude.ai.
+This tool returns immediately after submitting the task.
 
-Workflow:
-1. Call seedream_submit with your prompt → Get task_id instantly
-2. Call seedream_result with task_id → Check if images are ready
-3. Repeat step 2 until status is "completed"
+**After submitting**: View your generated images at https://seedream-gallery.web.app
 
 Args:
   - prompt (string, required): Description of the image to generate
@@ -42,14 +38,9 @@ Args:
   - size (string): Output size (default: '2K')
   - count (number): Number of images to generate (1-15, default: 4)
 
-Returns:
-  Task ID for tracking progress with seedream_result tool.
-
-Example conversation:
-  User: "Generate a cat wearing a hat"
-  Assistant: [calls seedream_submit] "Task submitted! ID: abc123. Checking status..."
-  Assistant: [calls seedream_result] "Still generating (2/4 images ready)..."
-  Assistant: [calls seedream_result] "Done! Here are your 4 images: ..."`,
+Example:
+  User: "Generate a sunset over mountains"
+  Assistant: [calls seedream_submit] "Task submitted! Your images will be ready in about 30-60 seconds. View them at https://seedream-gallery.web.app"`,
       inputSchema: SubmitInputSchema,
       outputSchema: SubmitOutputSchema,
       annotations: {
@@ -92,24 +83,19 @@ Example conversation:
       const output = {
         success: true,
         task_id: taskId,
-        status: "pending",
-        message: `Task submitted! Generating ${params.count} image(s) in background.`,
-        check_command: `Call seedream_result with task_id="${taskId}" to check progress`,
+        status: "submitted",
+        message: `Task submitted! Generating ${params.count} image(s). View at https://seedream-gallery.web.app`,
       };
 
       const textContent = [
-        "# Task Submitted Successfully",
+        "# ✅ Task Submitted",
         "",
-        `**Task ID:** \`${taskId}\``,
-        `**Status:** pending`,
         `**Prompt:** ${params.prompt}`,
         `**Images:** ${params.count}`,
         "",
-        "## Next Steps",
+        "Your images will be ready in **30-60 seconds**.",
         "",
-        `Call \`seedream_result\` with task_id="${taskId}" to check progress.`,
-        "",
-        "The task is processing in the background. Images will be ready in 30-60 seconds.",
+        "👉 **View results:** https://seedream-gallery.web.app",
       ].join("\n");
 
       return {

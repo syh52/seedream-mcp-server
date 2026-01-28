@@ -41,10 +41,9 @@ import { registerBlendTool } from "./tools/blend.js";
 import { registerVariationsTool } from "./tools/variations.js";
 import { registerStatusTool } from "./tools/status.js";
 import { registerSubmitTool } from "./tools/submit.js";
-import { registerResultTool } from "./tools/result.js";
 
 // Server version
-const SERVER_VERSION = "1.3.4";
+const SERVER_VERSION = "2.0.0";
 
 // MCP Protocol version for Claude.ai compatibility
 const MCP_PROTOCOL_VERSION = "2024-11-05";
@@ -61,9 +60,8 @@ registerEditTool(server);
 registerBlendTool(server);
 registerVariationsTool(server);
 registerStatusTool(server);
-// Async tools for Claude.ai (avoids timeout issues)
+// Async task submission for Claude.ai (avoids timeout issues)
 registerSubmitTool(server);
-registerResultTool(server);
 
 /**
  * Run server with stdio transport (local CLI mode)
