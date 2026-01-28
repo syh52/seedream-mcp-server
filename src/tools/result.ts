@@ -161,12 +161,12 @@ Example:
 
           case "generating":
           case "processing":
-            const progress = output.progress;
+            const completedCount = task.images.filter(i => i.status === "ready").length;
             textContent = [
               `# Task Status: ${task.status === "generating" ? "Generating" : "Processing"}`,
               "",
               `**Task ID:** \`${task.id}\``,
-              `**Progress:** ${progress.completed}/${progress.total} images`,
+              `**Progress:** ${completedCount}/${task.expectedCount} images`,
               `**Prompt:** ${task.prompt}`,
               "",
               "Images are being generated. Check again in 10-15 seconds.",
