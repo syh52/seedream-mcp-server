@@ -180,3 +180,81 @@ export const VariationsInputSchema = BaseInputSchema.extend({
 }).strict();
 
 export type VariationsInput = z.infer<typeof VariationsInputSchema>;
+
+// ==================== Async Task Schemas ====================
+
+// Submit task input (for Claude.ai compatibility - avoids timeout)
+export const SubmitInputSchema = z.object({
+  prompt: z.string()
+    .min(1, "Prompt is required")
+    .max(2000, "Prompt must not exceed 2000 characters")
+    .describe("Text description of the image to generate"),
+  mode: z.enum(["text", "image", "multi"])
+    .default("text")
+    .describe("Generation mode: 'text' for text-to-image, 'image' for editing, 'multi' for blending"),
+  size: ImageSize
+    .describe("Output image size"),
+  count: z.number()
+    .int()
+    .min(1)
+    .max(15)
+    .default(4)
+    .describe("Number of images to generate (1-15)"),
+  strength: z.number()
+    .min(0)
+    .max(1)
+    .optional()
+    .describe("Reference strength for image/multi modes (0-1)"),
+}).strict();
+
+export type SubmitInput = z.infer<typeof SubmitInputSchema>;
+
+// Submit task output
+export const SubmitOutputSchema = z.object({
+  success: z.boolean().describe("Whether the task was submitted successfully"),
+  task_id: z.string().describe("Task ID for tracking progress"),
+  status: z.string().describe("Initial task status"),
+  message: z.string().describe("Submission confirmation message"),
+  check_command: z.string().describe("Command to check task status"),
+});
+
+export type SubmitOutput = z.infer<typeof SubmitOutputSchema>;
+
+// Result query input
+export const ResultInputSchema = z.object({
+  task_id: z.string()
+    .min(1, "Task ID is required")
+    .describe("Task ID returned from seedream_submit"),
+}).strict();
+
+export type ResultInput = z.infer<typeof ResultInputSchema>;
+
+// Task image in result
+const TaskImageSchema = z.object({
+  id: z.string().describe("Image ID"),
+  url: z.string().describe("Image URL (valid for 24 hours)"),
+  storageUrl: z.string().optional().describe("Permanent Firebase Storage URL"),
+  size: z.string().describe("Image dimensions"),
+  status: z.enum(["pending", "ready", "error"]).describe("Image status"),
+  error: z.string().optional().describe("Error message if status is error"),
+});
+
+// Result query output
+export const ResultOutputSchema = z.object({
+  success: z.boolean().describe("Whether the query was successful"),
+  task_id: z.string().describe("Task ID"),
+  status: z.enum(["pending", "generating", "processing", "completed", "failed", "cancelled"])
+    .describe("Current task status"),
+  prompt: z.string().describe("The prompt used for generation"),
+  images: z.array(TaskImageSchema).describe("Generated images (if completed)"),
+  progress: z.object({
+    completed: z.number().describe("Number of images completed"),
+    total: z.number().describe("Total images expected"),
+  }).optional().describe("Generation progress"),
+  usage: UsageSchema.optional().describe("API usage metrics (if completed)"),
+  error: z.string().optional().describe("Error message (if failed)"),
+  created_at: z.number().describe("Task creation timestamp"),
+  completed_at: z.number().optional().describe("Task completion timestamp"),
+});
+
+export type ResultOutput = z.infer<typeof ResultOutputSchema>;

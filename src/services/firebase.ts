@@ -212,3 +212,134 @@ export function isFirebaseConfigured(): boolean {
     process.env.FIREBASE_SERVICE_ACCOUNT_PATH
   );
 }
+
+// ==================== Task Queue Functions ====================
+
+const TASKS_COLLECTION = "tasks";
+
+export type TaskStatus = "pending" | "generating" | "processing" | "completed" | "failed" | "cancelled";
+export type GenerateMode = "text" | "image" | "multi";
+
+export interface TaskImage {
+  id: string;
+  url: string;
+  storageUrl?: string;
+  size: string;
+  status: "pending" | "ready" | "error";
+  error?: string;
+  processedAt?: number;
+}
+
+export interface TaskRecord {
+  id: string;
+  userId: string;
+  userName: string;
+  status: TaskStatus;
+  prompt: string;
+  mode: GenerateMode;
+  size: string;
+  strength?: number;
+  expectedCount: number;
+  images: TaskImage[];
+  createdAt: number;
+  completedAt?: number;
+  error?: string;
+  usage?: { generated_images: number; total_tokens: number };
+  source: "mcp";
+  retryCount: number;
+  maxRetries: number;
+}
+
+/**
+ * Create a new task in Firestore
+ * Returns the task ID for tracking
+ */
+export async function createTask(data: {
+  prompt: string;
+  mode: GenerateMode;
+  size: string;
+  strength?: number;
+  expectedCount: number;
+}): Promise<string> {
+  const app = initFirebase();
+  const db = getFirestore(app);
+  const mcpUser = getMcpUser();
+
+  const taskData: Omit<TaskRecord, "id"> = {
+    userId: mcpUser.userId,
+    userName: mcpUser.userName,
+    status: "pending",
+    prompt: data.prompt,
+    mode: data.mode,
+    size: data.size,
+    strength: data.strength,
+    expectedCount: data.expectedCount,
+    images: [],
+    createdAt: Date.now(),
+    source: "mcp",
+    retryCount: 0,
+    maxRetries: 2,
+  };
+
+  const docRef = await db.collection(TASKS_COLLECTION).add(taskData);
+  console.error(`[firebase] Created task: ${docRef.id}`);
+  return docRef.id;
+}
+
+/**
+ * Get a task by ID
+ */
+export async function getTask(taskId: string): Promise<TaskRecord | null> {
+  const app = initFirebase();
+  const db = getFirestore(app);
+
+  const doc = await db.collection(TASKS_COLLECTION).doc(taskId).get();
+  if (!doc.exists) {
+    return null;
+  }
+
+  return { id: doc.id, ...doc.data() } as TaskRecord;
+}
+
+/**
+ * Update task status
+ */
+export async function updateTaskStatus(
+  taskId: string,
+  status: TaskStatus,
+  updates?: Partial<TaskRecord>
+): Promise<void> {
+  const app = initFirebase();
+  const db = getFirestore(app);
+
+  const data: Record<string, unknown> = { status, ...updates };
+  if (status === "completed" || status === "failed") {
+    data.completedAt = Date.now();
+  }
+
+  await db.collection(TASKS_COLLECTION).doc(taskId).update(data);
+  console.error(`[firebase] Updated task ${taskId} to ${status}`);
+}
+
+/**
+ * Add an image to a task
+ */
+export async function addTaskImage(
+  taskId: string,
+  image: TaskImage
+): Promise<void> {
+  const app = initFirebase();
+  const db = getFirestore(app);
+
+  await db.collection(TASKS_COLLECTION).doc(taskId).update({
+    images: FieldValue.arrayUnion(image),
+  });
+  console.error(`[firebase] Added image to task ${taskId}: ${image.id}`);
+}
+
+/**
+ * Get user ID for task ownership verification
+ */
+export function getFirebaseUserId(): string {
+  return process.env.FIREBASE_USER_ID || "mcp-public";
+}

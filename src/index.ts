@@ -40,9 +40,11 @@ import { registerEditTool } from "./tools/edit.js";
 import { registerBlendTool } from "./tools/blend.js";
 import { registerVariationsTool } from "./tools/variations.js";
 import { registerStatusTool } from "./tools/status.js";
+import { registerSubmitTool } from "./tools/submit.js";
+import { registerResultTool } from "./tools/result.js";
 
 // Server version
-const SERVER_VERSION = "1.2.0";
+const SERVER_VERSION = "1.3.0";
 
 // MCP Protocol version for Claude.ai compatibility
 const MCP_PROTOCOL_VERSION = "2024-11-05";
@@ -59,6 +61,9 @@ registerEditTool(server);
 registerBlendTool(server);
 registerVariationsTool(server);
 registerStatusTool(server);
+// Async tools for Claude.ai (avoids timeout issues)
+registerSubmitTool(server);
+registerResultTool(server);
 
 /**
  * Run server with stdio transport (local CLI mode)
@@ -155,6 +160,8 @@ async function runHttp(): Promise<void> {
         "seedream_blend - Blend multiple images",
         "seedream_variations - Generate variations",
         "seedream_status - Check server status",
+        "seedream_submit - Submit async task (for Claude.ai)",
+        "seedream_result - Get task result (for Claude.ai)",
       ],
       documentation: "https://github.com/syh52/seedream-mcp-server",
       optimizations: ["parallel downloads", "caching", "retry mechanism", "timing metrics"],
