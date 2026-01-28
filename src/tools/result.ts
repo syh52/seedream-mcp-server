@@ -113,28 +113,35 @@ Example:
           };
         }
 
-        const output = {
+        // Build output object, filtering out undefined values (MCP may reject them)
+        const images = task.images.map(img => {
+          const imgObj: Record<string, unknown> = {
+            id: img.id,
+            url: img.url,
+            size: img.size,
+            status: img.status,
+          };
+          if (img.storageUrl) imgObj.storageUrl = img.storageUrl;
+          if (img.error) imgObj.error = img.error;
+          return imgObj;
+        });
+
+        const output: Record<string, unknown> = {
           success: true,
           task_id: task.id,
           status: task.status,
           prompt: task.prompt,
-          images: task.images.map(img => ({
-            id: img.id,
-            url: img.url,
-            storageUrl: img.storageUrl,
-            size: img.size,
-            status: img.status,
-            error: img.error,
-          })),
+          images,
           progress: {
             completed: task.images.filter(i => i.status === "ready").length,
             total: task.expectedCount,
           },
-          usage: task.usage,
-          error: task.error,
           created_at: task.createdAt,
-          completed_at: task.completedAt,
         };
+        // Only include optional fields if they have values
+        if (task.usage) output.usage = task.usage;
+        if (task.error) output.error = task.error;
+        if (task.completedAt) output.completed_at = task.completedAt;
 
         // Format text response based on status
         let textContent: string;
