@@ -182,14 +182,18 @@ async function processTaskWithFirebase(
         }
       }
 
+      // Build TaskImage object, excluding undefined fields (Firestore rejects undefined)
       const taskImage: TaskImage = {
         id: imageId,
         url: img.url,
-        storageUrl,
         size: img.size,
         status: "ready",
         processedAt: Date.now(),
       };
+      // Only add storageUrl if it exists
+      if (storageUrl) {
+        taskImage.storageUrl = storageUrl;
+      }
 
       await addTaskImage(taskId, taskImage);
     }
