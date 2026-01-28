@@ -287,6 +287,44 @@ export async function createTask(data: {
 }
 
 /**
+ * Create a task with a specific ID (for optimistic task creation)
+ * Used when we need to return the task ID immediately before Firebase confirms
+ */
+export async function createTaskWithId(
+  taskId: string,
+  data: {
+    prompt: string;
+    mode: GenerateMode;
+    size: string;
+    strength?: number;
+    expectedCount: number;
+  }
+): Promise<void> {
+  const app = initFirebase();
+  const db = getFirestore(app);
+  const mcpUser = getMcpUser();
+
+  const taskData: Omit<TaskRecord, "id"> = {
+    userId: mcpUser.userId,
+    userName: mcpUser.userName,
+    status: "pending",
+    prompt: data.prompt,
+    mode: data.mode,
+    size: data.size,
+    strength: data.strength,
+    expectedCount: data.expectedCount,
+    images: [],
+    createdAt: Date.now(),
+    source: "mcp",
+    retryCount: 0,
+    maxRetries: 2,
+  };
+
+  await db.collection(TASKS_COLLECTION).doc(taskId).set(taskData);
+  console.error(`[firebase] Created task with ID: ${taskId}`);
+}
+
+/**
  * Get a task by ID
  */
 export async function getTask(taskId: string): Promise<TaskRecord | null> {

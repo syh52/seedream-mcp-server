@@ -44,7 +44,7 @@ import { registerSubmitTool } from "./tools/submit.js";
 import { registerResultTool } from "./tools/result.js";
 
 // Server version
-const SERVER_VERSION = "1.3.0";
+const SERVER_VERSION = "1.3.1";
 
 // MCP Protocol version for Claude.ai compatibility
 const MCP_PROTOCOL_VERSION = "2024-11-05";
