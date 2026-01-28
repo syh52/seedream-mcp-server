@@ -265,14 +265,13 @@ export async function createTask(data: {
   const db = getFirestore(app);
   const mcpUser = getMcpUser();
 
-  const taskData: Omit<TaskRecord, "id"> = {
+  const taskData: Record<string, unknown> = {
     userId: mcpUser.userId,
     userName: mcpUser.userName,
     status: "pending",
     prompt: data.prompt,
     mode: data.mode,
     size: data.size,
-    strength: data.strength,
     expectedCount: data.expectedCount,
     images: [],
     createdAt: Date.now(),
@@ -280,6 +279,11 @@ export async function createTask(data: {
     retryCount: 0,
     maxRetries: 2,
   };
+
+  // Only include strength if defined (Firestore doesn't allow undefined values)
+  if (data.strength !== undefined) {
+    taskData.strength = data.strength;
+  }
 
   const docRef = await db.collection(TASKS_COLLECTION).add(taskData);
   console.error(`[firebase] Created task: ${docRef.id}`);
@@ -304,14 +308,13 @@ export async function createTaskWithId(
   const db = getFirestore(app);
   const mcpUser = getMcpUser();
 
-  const taskData: Omit<TaskRecord, "id"> = {
+  const taskData: Record<string, unknown> = {
     userId: mcpUser.userId,
     userName: mcpUser.userName,
     status: "pending",
     prompt: data.prompt,
     mode: data.mode,
     size: data.size,
-    strength: data.strength,
     expectedCount: data.expectedCount,
     images: [],
     createdAt: Date.now(),
@@ -319,6 +322,11 @@ export async function createTaskWithId(
     retryCount: 0,
     maxRetries: 2,
   };
+
+  // Only include strength if defined (Firestore doesn't allow undefined values)
+  if (data.strength !== undefined) {
+    taskData.strength = data.strength;
+  }
 
   await db.collection(TASKS_COLLECTION).doc(taskId).set(taskData);
   console.error(`[firebase] Created task with ID: ${taskId}`);
