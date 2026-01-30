@@ -30,7 +30,7 @@ export function registerSubmitTool(server: McpServer): void {
 **USE THIS TOOL ON CLAUDE.AI** - The regular seedream_generate tool times out on Claude.ai.
 This tool returns immediately after submitting the task.
 
-**After submitting**: View your generated images at https://seedream-gallery.web.app
+**After submitting**: View your generated images at https://seedream-gallery.firebaseapp.com
 
 Args:
   - prompt (string, required): Description of the image to generate
@@ -40,7 +40,7 @@ Args:
 
 Example:
   User: "Generate a sunset over mountains"
-  Assistant: [calls seedream_submit] "Task submitted! Your images will be ready in about 30-60 seconds. View them at https://seedream-gallery.web.app"`,
+  Assistant: [calls seedream_submit] "Task submitted! Your images will be ready in about 30-60 seconds. View them at https://seedream-gallery.firebaseapp.com"`,
       inputSchema: SubmitInputSchema,
       outputSchema: SubmitOutputSchema,
       annotations: {
@@ -84,7 +84,7 @@ Example:
         success: true,
         task_id: taskId,
         status: "submitted",
-        message: `Task submitted! Generating ${params.count} image(s). View at https://seedream-gallery.web.app`,
+        message: `Task submitted! Generating ${params.count} image(s). View at https://seedream-gallery.firebaseapp.com`,
       };
 
       const textContent = [
@@ -95,7 +95,7 @@ Example:
         "",
         "Your images will be ready in **30-60 seconds**.",
         "",
-        "👉 **View results:** https://seedream-gallery.web.app",
+        "👉 **View results:** https://seedream-gallery.firebaseapp.com",
       ].join("\n");
 
       return {
