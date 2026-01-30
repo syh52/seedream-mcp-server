@@ -21,11 +21,12 @@ const API_ENDPOINT = "https://ark.ap-southeast.bytepluses.com/api/v3/images/gene
 const MODEL_ID = "seedream-4-5-251128"; // Latest Seedream 4.5 model
 
 // Performance configuration
+// Note: Keep concurrency low to avoid OOM on Railway (512MB memory limit)
 const CONFIG = {
   API_TIMEOUT: 180000,           // 3 minutes for streaming generation
   DOWNLOAD_TIMEOUT: 30000,       // 30 seconds per image download
-  MAX_PARALLEL_DOWNLOADS: 8,     // Concurrent download limit
-  MAX_PARALLEL_API_CALLS: 8,     // Concurrent API calls for batch generation (increased)
+  MAX_PARALLEL_DOWNLOADS: 4,     // Concurrent download limit
+  MAX_PARALLEL_API_CALLS: 2,     // Concurrent API calls (low to avoid OOM)
   RETRY_ATTEMPTS: 2,             // Retry failed downloads
   RETRY_DELAY: 1000,             // 1 second between retries
   DEFAULT_BATCH_COUNT: 4,        // Default images per prompt

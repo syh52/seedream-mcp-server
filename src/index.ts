@@ -43,7 +43,7 @@ import { registerStatusTool } from "./tools/status.js";
 import { registerSubmitTool } from "./tools/submit.js";
 
 // Server version
-const SERVER_VERSION = "2.2.0";
+const SERVER_VERSION = "2.2.1";
 
 // MCP Protocol version for Claude.ai compatibility
 const MCP_PROTOCOL_VERSION = "2024-11-05";
