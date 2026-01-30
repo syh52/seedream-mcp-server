@@ -25,7 +25,7 @@ const CONFIG = {
   API_TIMEOUT: 180000,           // 3 minutes for streaming generation
   DOWNLOAD_TIMEOUT: 30000,       // 30 seconds per image download
   MAX_PARALLEL_DOWNLOADS: 8,     // Concurrent download limit
-  MAX_PARALLEL_API_CALLS: 4,     // Concurrent API calls for batch generation
+  MAX_PARALLEL_API_CALLS: 8,     // Concurrent API calls for batch generation (increased)
   RETRY_ATTEMPTS: 2,             // Retry failed downloads
   RETRY_DELAY: 1000,             // 1 second between retries
   DEFAULT_BATCH_COUNT: 4,        // Default images per prompt
@@ -368,15 +368,17 @@ function makeStreamingRequest(
 }
 
 /**
- * Generate a single image from the API
- * Returns the generated image URL and metadata
+ * Generate a single image and immediately download it (pipeline processing)
+ * Returns the complete GeneratedImage with local path
  */
-async function generateSingleImage(
+async function generateAndDownloadImage(
   payload: Record<string, unknown>,
   apiKey: string,
   index: number,
+  downloadDir: string,
+  shouldDownload: boolean,
   onProgress?: ProgressCallback
-): Promise<{ url: string; size: string } | null> {
+): Promise<GeneratedImage | null> {
   try {
     const response = await makeStreamingRequest(payload, apiKey);
 
@@ -391,6 +393,17 @@ async function generateSingleImage(
           url,
           message: `Image ${index} generated`,
         });
+
+        // Pipeline: immediately download after generation
+        if (shouldDownload) {
+          try {
+            const { localPath, downloadTime } = await downloadImage(url, downloadDir, index);
+            debug(`Image ${index} downloaded in ${downloadTime}ms`);
+            return { url, size, localPath, downloadTime };
+          } catch {
+            return { url, size };
+          }
+        }
 
         return { url, size };
       } else if (event.type === "image_generation.partial_failed") {
@@ -485,14 +498,14 @@ export async function generateImages(
 
     debug(`Making ${numCalls} parallel API calls`, { prompt: prompt.slice(0, 50), size });
 
-    // Create API call tasks
+    // Create API call tasks (each task generates + downloads one image)
     const apiTasks = Array.from({ length: numCalls }, (_, i) => ({
       index: i + 1,
       payload: { ...payload }, // Clone payload for each call
     }));
 
-    // Process API calls with concurrency limit
-    const results: Array<{ url: string; size: string } | null> = [];
+    // Pipeline processing: generate + download in parallel with concurrency limit
+    // Each task completes generation then immediately downloads (no waiting for others)
     const queue = [...apiTasks];
     const inProgress: Promise<void>[] = [];
 
@@ -501,8 +514,18 @@ export async function generateImages(
       while (queue.length > 0 && inProgress.length < CONFIG.MAX_PARALLEL_API_CALLS) {
         const task = queue.shift()!;
         const promise = (async () => {
-          const result = await generateSingleImage(task.payload, apiKey, task.index, onProgress);
-          results.push(result);
+          // Pipeline: generate → download (immediate)
+          const result = await generateAndDownloadImage(
+            task.payload,
+            apiKey,
+            task.index,
+            downloadDir,
+            download,
+            onProgress
+          );
+          if (result) {
+            generatedImages.push(result);
+          }
         })();
         inProgress.push(promise);
       }
@@ -523,40 +546,20 @@ export async function generateImages(
       }
     }
 
-    // Filter successful results and download images
-    const successfulImages = results.filter((r): r is { url: string; size: string } => r !== null);
-
-    // Download all images in parallel
-    if (download && successfulImages.length > 0) {
-      const downloadTasks = successfulImages.map(async (img, idx) => {
-        try {
-          const { localPath, downloadTime } = await downloadImage(img.url, downloadDir, idx + 1);
-          generatedImages.push({ url: img.url, size: img.size, localPath, downloadTime });
-        } catch {
-          generatedImages.push({ url: img.url, size: img.size });
-        }
-      });
-      await Promise.all(downloadTasks);
-    } else {
-      successfulImages.forEach(img => {
-        generatedImages.push({ url: img.url, size: img.size });
-      });
-    }
-
     // Calculate usage
     usage = {
-      generated_images: successfulImages.length,
-      total_tokens: successfulImages.length * 4096, // Estimate
+      generated_images: generatedImages.length,
+      total_tokens: generatedImages.length * 4096, // Estimate
     };
 
     onProgress?.({
       type: "completed",
-      generated: successfulImages.length,
+      generated: generatedImages.length,
       total: numCalls,
     });
 
     const generationTime = Date.now() - generationStartTime;
-    debug(`Generation completed: ${successfulImages.length}/${numCalls} images in ${generationTime}ms`);
+    debug(`Generation completed: ${generatedImages.length}/${numCalls} images in ${generationTime}ms`);
 
     // Sort by index (downloads may complete out of order)
     generatedImages.sort((a, b) => {
