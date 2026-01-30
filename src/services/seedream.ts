@@ -24,7 +24,8 @@ const MODEL_ID = "seedream-4-5-251128"; // Latest Seedream 4.5 model
 const CONFIG = {
   API_TIMEOUT: 180000,           // 3 minutes for streaming generation
   DOWNLOAD_TIMEOUT: 30000,       // 30 seconds per image download
-  MAX_PARALLEL_DOWNLOADS: 8,     // Concurrent download limit (increased for batch)
+  MAX_PARALLEL_DOWNLOADS: 8,     // Concurrent download limit
+  MAX_PARALLEL_API_CALLS: 4,     // Concurrent API calls for batch generation
   RETRY_ATTEMPTS: 2,             // Retry failed downloads
   RETRY_DELAY: 1000,             // 1 second between retries
   DEFAULT_BATCH_COUNT: 4,        // Default images per prompt
@@ -367,8 +368,56 @@ function makeStreamingRequest(
 }
 
 /**
- * Generate images using SeeDream API with streaming
- * Images are downloaded as they're generated for faster perceived performance
+ * Generate a single image from the API
+ * Returns the generated image URL and metadata
+ */
+async function generateSingleImage(
+  payload: Record<string, unknown>,
+  apiKey: string,
+  index: number,
+  onProgress?: ProgressCallback
+): Promise<{ url: string; size: string } | null> {
+  try {
+    const response = await makeStreamingRequest(payload, apiKey);
+
+    for await (const event of parseSSEStream(response)) {
+      if (event.type === "image_generation.partial_succeeded") {
+        const url = event.url as string;
+        const size = (event.size as string) || "2K";
+
+        onProgress?.({
+          type: "image",
+          index,
+          url,
+          message: `Image ${index} generated`,
+        });
+
+        return { url, size };
+      } else if (event.type === "image_generation.partial_failed") {
+        onProgress?.({
+          type: "error",
+          index,
+          message: (event.error as { message?: string })?.message || "Image generation failed",
+        });
+        return null;
+      }
+    }
+
+    return null;
+  } catch (error) {
+    debug(`Image ${index} generation failed`, { error: (error as Error).message });
+    onProgress?.({
+      type: "error",
+      index,
+      message: (error as Error).message,
+    });
+    return null;
+  }
+}
+
+/**
+ * Generate images using SeeDream API
+ * Uses parallel API calls for batch generation (each call generates 1 image)
  */
 export async function generateImages(
   options: GenerationOptions,
@@ -426,80 +475,88 @@ export async function generateImages(
       }
     }
 
-    // Handle batch generation (only when NOT using reference images)
-    // Per docs: model auto-detects batch keywords like "a series", "Generate X images"
-    // To ensure batch generation works, we prepend a batch hint to the prompt
-    if (batchCount > 1 && (!images || images.length === 0)) {
-      // Add batch hint to prompt for reliable multi-image generation
-      payload.prompt = `Generate ${batchCount} variations: ${prompt}`;
-      payload.sequential_image_generation = "auto";
-      payload.sequential_image_generation_options = {
-        max_images: Math.min(batchCount, 15), // API limit: max 15
-      };
-    }
-
-    // Make streaming request
+    // Parallel API calls for batch generation
     const generationStartTime = Date.now();
-    const response = await makeStreamingRequest(payload, apiKey);
-
     const generatedImages: GeneratedImage[] = [];
-    const downloadPromises: Promise<void>[] = [];
-    let imageIndex = 0;
     let usage: { generated_images: number; total_tokens: number } | undefined;
 
-    // Process SSE events as they arrive
-    for await (const event of parseSSEStream(response)) {
-      if (event.type === "image_generation.partial_succeeded") {
-        // Image generated - start downloading immediately
-        const url = event.url as string;
-        const imgSize = (event.size as string) || size;
-        imageIndex++;
+    // Determine how many API calls to make
+    const numCalls = (!images || images.length === 0) ? Math.min(batchCount, 15) : 1;
 
-        onProgress?.({
-          type: "image",
-          index: imageIndex,
-          url,
-          message: `Image ${imageIndex} generated`,
-        });
+    debug(`Making ${numCalls} parallel API calls`, { prompt: prompt.slice(0, 50), size });
 
-        if (download) {
-          // Download in background, don't block stream processing
-          const idx = imageIndex;
-          const downloadPromise = (async () => {
-            try {
-              const { localPath, downloadTime } = await downloadImage(url, downloadDir, idx);
-              generatedImages.push({ url, size: imgSize, localPath, downloadTime });
-            } catch {
-              generatedImages.push({ url, size: imgSize });
-            }
-          })();
-          downloadPromises.push(downloadPromise);
-        } else {
-          generatedImages.push({ url, size: imgSize });
+    // Create API call tasks
+    const apiTasks = Array.from({ length: numCalls }, (_, i) => ({
+      index: i + 1,
+      payload: { ...payload }, // Clone payload for each call
+    }));
+
+    // Process API calls with concurrency limit
+    const results: Array<{ url: string; size: string } | null> = [];
+    const queue = [...apiTasks];
+    const inProgress: Promise<void>[] = [];
+
+    while (queue.length > 0 || inProgress.length > 0) {
+      // Fill up to max parallel API calls
+      while (queue.length > 0 && inProgress.length < CONFIG.MAX_PARALLEL_API_CALLS) {
+        const task = queue.shift()!;
+        const promise = (async () => {
+          const result = await generateSingleImage(task.payload, apiKey, task.index, onProgress);
+          results.push(result);
+        })();
+        inProgress.push(promise);
+      }
+
+      // Wait for at least one to complete
+      if (inProgress.length > 0) {
+        await Promise.race(inProgress);
+        // Remove completed promises
+        for (let i = inProgress.length - 1; i >= 0; i--) {
+          const status = await Promise.race([
+            inProgress[i].then(() => "fulfilled"),
+            Promise.resolve("pending"),
+          ]);
+          if (status === "fulfilled") {
+            inProgress.splice(i, 1);
+          }
         }
-      } else if (event.type === "image_generation.partial_failed") {
-        imageIndex++;
-        onProgress?.({
-          type: "error",
-          index: imageIndex,
-          message: (event.error as { message?: string })?.message || "Image generation failed",
-        });
-      } else if (event.type === "image_generation.completed") {
-        usage = event.usage as { generated_images: number; total_tokens: number };
-        onProgress?.({
-          type: "completed",
-          generated: usage?.generated_images || imageIndex,
-          total: usage?.generated_images || imageIndex,
-        });
       }
     }
 
-    const generationTime = Date.now() - generationStartTime;
+    // Filter successful results and download images
+    const successfulImages = results.filter((r): r is { url: string; size: string } => r !== null);
 
-    // Wait for all downloads to complete
-    const downloadStartTime = Date.now();
-    await Promise.all(downloadPromises);
-    const downloadTime = Date.now() - downloadStartTime;
+    // Download all images in parallel
+    if (download && successfulImages.length > 0) {
+      const downloadTasks = successfulImages.map(async (img, idx) => {
+        try {
+          const { localPath, downloadTime } = await downloadImage(img.url, downloadDir, idx + 1);
+          generatedImages.push({ url: img.url, size: img.size, localPath, downloadTime });
+        } catch {
+          generatedImages.push({ url: img.url, size: img.size });
+        }
+      });
+      await Promise.all(downloadTasks);
+    } else {
+      successfulImages.forEach(img => {
+        generatedImages.push({ url: img.url, size: img.size });
+      });
+    }
+
+    // Calculate usage
+    usage = {
+      generated_images: successfulImages.length,
+      total_tokens: successfulImages.length * 4096, // Estimate
+    };
+
+    onProgress?.({
+      type: "completed",
+      generated: successfulImages.length,
+      total: numCalls,
+    });
+
+    const generationTime = Date.now() - generationStartTime;
+    debug(`Generation completed: ${successfulImages.length}/${numCalls} images in ${generationTime}ms`);
 
     // Sort by index (downloads may complete out of order)
     generatedImages.sort((a, b) => {
@@ -538,7 +595,7 @@ export async function generateImages(
       usage,
       timing: {
         generation_ms: generationTime,
-        download_ms: downloadTime,
+        download_ms: 0, // Downloads included in generation time (parallel)
         total_ms: Date.now() - totalStartTime,
       },
     };

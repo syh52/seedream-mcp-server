@@ -4,14 +4,20 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-SeeDream MCP Server - 让 Claude Code 直接生成图片的 MCP 服务器，基于 BytePlus SeeDream 4.5 模型。
+SeeDream MCP Server - 让 Claude 直接生成图片的 MCP 服务器，基于 BytePlus SeeDream 4.5 模型。
 
-提供 5 个工具：
-- `seedream_generate` - 文本生成图片
-- `seedream_edit` - 编辑现有图片（单图参考）
-- `seedream_blend` - 多图融合（2-14 张）
-- `seedream_variations` - 批量生成变体（2-15 张）
-- `seedream_status` - 服务状态检查（不消耗 API 配额）
+**部署地址**: https://seedream-mcp-server-production.up.railway.app
+
+**可用工具** (6 个):
+
+| 工具 | 用途 | Claude Code | Claude.ai |
+|------|------|-------------|-----------|
+| `seedream_generate` | 文本生成图片 | ✅ | ❌ 超时 |
+| `seedream_edit` | 编辑现有图片 | ✅ | ❌ 超时 |
+| `seedream_blend` | 多图融合 (2-14 张) | ✅ | ❌ 超时 |
+| `seedream_variations` | 批量变体 (2-15 张) | ✅ | ❌ 超时 |
+| `seedream_submit` | 提交任务，Web App 查看 | ✅ | ✅ |
+| `seedream_status` | 服务状态检查 | ✅ | ✅ |
 
 ## Commands
 
@@ -27,10 +33,10 @@ ARK_API_KEY="your-key"           # SeeDream API 密钥
 TRANSPORT="stdio"                 # stdio（默认）或 http
 PORT=3000                         # HTTP 模式端口
 
-# 环境变量（Firebase 同步，可选）
-FIREBASE_SERVICE_ACCOUNT='{"type":"service_account",...}'  # 服务账号 JSON
-FIREBASE_USER_ID="your-uid"       # 你的 Firebase UID
-FIREBASE_USER_NAME="Your Name"    # 显示名称
+# 环境变量（Firebase 同步）
+FIREBASE_SERVICE_ACCOUNT='{"type":"service_account",...}'
+FIREBASE_USER_ID="your-uid"
+FIREBASE_USER_NAME="Your Name"
 ```
 
 ## Architecture
@@ -39,100 +45,64 @@ FIREBASE_USER_NAME="Your Name"    # 显示名称
 src/
 ├── index.ts              # 入口点（stdio + http 双模式）
 ├── services/
-│   └── seedream.ts       # SeeDream API 客户端（核心业务逻辑）
+│   ├── seedream.ts       # SeeDream API 客户端（流式响应、并行下载）
+│   └── firebase.ts       # Firebase Admin SDK（Storage + Firestore）
 ├── schemas/
 │   └── index.ts          # Zod 验证 schema（输入 + 输出）
 └── tools/
-    ├── generate.ts       # 文本生成图片
+    ├── generate.ts       # 文本生成图片（Claude Code 专用）
     ├── edit.ts           # 图片编辑
     ├── blend.ts          # 多图融合
     ├── variations.ts     # 批量变体
+    ├── submit.ts         # 异步提交（Claude.ai 专用）
     └── status.ts         # 健康检查
 ```
 
-### 数据流
+### 两种使用模式
 
+**Claude Code (本地)**:
 ```
-Tool Handler → Zod 验证 → generateImages() → SeeDream API → 并行下载 → 格式化输出
+seedream_generate → 同步返回图片 URL → 自动同步到 Firebase
+```
+
+**Claude.ai (网页)**:
+```
+seedream_submit → 立即返回 → 后台生成 → 用户去 Web App 查看
+                                         ↓
+                     https://seedream-gallery.firebaseapp.com
 ```
 
 ### 关键设计
 
-**services/seedream.ts** - API 客户端：
+**services/seedream.ts** - API 客户端:
+- 流式响应处理 (`image_generation.partial_succeeded`)
 - 并行下载（最多 4 张）
 - Base64 编码缓存（LRU, 5 分钟 TTL）
-- 指数退避重试（最多 2 次）
-- 性能计时指标
+- `skipFirebaseSync` 参数防止重复同步
 
-**schemas/index.ts** - 验证层：
-- 输入 schema（严格模式，拒绝额外字段）
-- 输出 schema（支持 structuredContent）
-- 8 种尺寸：2K, 4K, 1:1, 4:3, 3:4, 16:9, 9:16, 3:2, 2:3, 21:9
+**services/firebase.ts** - Firebase 集成:
+- `syncImageToFirebase()` - 上传 Storage + 写入 `images` 集合
+- `createTaskWithId()` / `updateTaskStatus()` - 任务队列管理
+- 所有写入必须过滤 `undefined` 值（Firestore 限制）
 
-**tools/*.ts** - 工具注册：
-- 每个工具注册到 MCP Server
-- 支持 Markdown 和 JSON 两种输出格式
-- 包含详细的工具描述（作为 LLM 使用指南）
-
-## Firebase 集成
-
-MCP Server 支持自动将生成的图片同步到 Firebase，使其在 Web App 的图库中可见。
-
-### 配置方式
-
-设置以下环境变量启用同步：
-
-```bash
-# 方式 1：JSON 字符串（推荐用于 Railway 等云平台）
-FIREBASE_SERVICE_ACCOUNT='{"type":"service_account","project_id":"seedream-gallery",...}'
-
-# 方式 2：文件路径（本地开发）
-FIREBASE_SERVICE_ACCOUNT_PATH="/path/to/service-account.json"
-
-# 方式 3：标准 GCP 变量
-GOOGLE_APPLICATION_CREDENTIALS="/path/to/service-account.json"
-```
-
-### 用户身份配置
-
-默认情况下，MCP 生成的图片归属于 `mcp-public` 虚拟用户。
-
-要同步到你的个人图库，额外设置：
-
-```bash
-FIREBASE_USER_ID="your-firebase-uid"     # 你的 Firebase UID
-FIREBASE_USER_NAME="Your Display Name"    # 显示名称
-```
-
-### 同步流程
-
-```
-生成图片 → 下载到本地 → 上传 Firebase Storage → 写入 Firestore
-                                ↓
-                    Web App /organize 实时显示
-```
-
-### 注意事项
-
-- 仅下载成功的图片会被同步
-- 图片存储在 `mcp-images/` 路径下
-- 会记录 `source: "mcp"` 标识来源
+**tools/submit.ts** - Claude.ai 兼容:
+- 使用 `setImmediate()` 延迟后台处理
+- 立即返回任务 ID（< 100ms）
+- 后台完成生成和 Firebase 同步
 
 ## API 最佳实践
 
-参考官方文档：https://docs.byteplus.com/en/docs/ModelArk/1541523
-
-**三种生成模式**：
+**三种生成模式**:
 | 模式 | API 参数 |
 |------|----------|
 | text | `sequential_image_generation: "auto"` |
 | image | `image: [单张]`, `sequential_image_generation: "auto"` |
 | multi | `image: [2-14张]`, `sequential_image_generation: "disabled"` ← 关键 |
 
-**重要**：
-- 不要修改用户 prompt，模型自动检测批量关键词
-- multi-image 模式必须禁用 sequential_image_generation
+**重要**:
+- multi-image 模式必须禁用 `sequential_image_generation`
 - 1K 尺寸仅 Seedream 4.0 支持，4.5 不支持
+- Firestore 不接受 `undefined` 值，必须过滤或使用 `null`
 
 ## 添加新工具
 
@@ -140,7 +110,7 @@ FIREBASE_USER_NAME="Your Display Name"    # 显示名称
 2. 在 `tools/` 创建工具文件
 3. 在 `index.ts` 导入并调用 `registerXxxTool(server)`
 
-工具模板：
+工具模板:
 ```typescript
 export function registerMyTool(server: McpServer): void {
   server.registerTool(
