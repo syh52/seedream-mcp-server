@@ -374,7 +374,8 @@ export async function generateImages(
   options: GenerationOptions,
   download: boolean = true,
   downloadDir: string = "./generated_images",
-  onProgress?: ProgressCallback
+  onProgress?: ProgressCallback,
+  skipFirebaseSync: boolean = false
 ): Promise<GenerationResult> {
   const totalStartTime = Date.now();
   const apiKey = process.env.ARK_API_KEY;
@@ -508,7 +509,8 @@ export async function generateImages(
     });
 
     // Sync to Firebase if configured (for Web App integration)
-    if (isFirebaseConfigured()) {
+    // Skip if caller will handle sync separately (e.g., submit.ts)
+    if (isFirebaseConfigured() && !skipFirebaseSync) {
       debug("Syncing images to Firebase...");
       const syncPromises = generatedImages
         .filter((img) => img.localPath) // Only sync images that were downloaded
@@ -526,6 +528,8 @@ export async function generateImages(
         });
       await Promise.all(syncPromises);
       debug("Firebase sync completed");
+    } else if (skipFirebaseSync) {
+      debug("Skipping Firebase sync (caller will handle)");
     }
 
     return {

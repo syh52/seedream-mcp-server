@@ -130,7 +130,7 @@ async function processTaskWithFirebase(
     // Step 2: Update status to generating
     await updateTaskStatus(taskId, "generating");
 
-    // Step 3: Generate images
+    // Step 3: Generate images (skip auto Firebase sync, we handle it below)
     const result = await generateImages(
       {
         prompt: params.prompt,
@@ -138,7 +138,9 @@ async function processTaskWithFirebase(
         batchCount: params.count,
       },
       true, // download
-      "./generated_images"
+      "./generated_images",
+      undefined, // onProgress
+      true // skipFirebaseSync - we sync manually to update task record
     );
 
     if (!result.success) {
