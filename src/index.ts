@@ -43,7 +43,8 @@ import { registerStatusTool } from "./tools/status.js";
 import { registerSubmitTool } from "./tools/submit.js";
 
 // Server version
-const SERVER_VERSION = "2.2.1";
+// v2.3.0: MCP submit only creates tasks, Cloud Function does processing
+const SERVER_VERSION = "2.3.0";
 
 // MCP Protocol version for Claude.ai compatibility
 const MCP_PROTOCOL_VERSION = "2024-11-05";

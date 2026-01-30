@@ -65,30 +65,41 @@ src/
 seedream_generate → 同步返回图片 URL → 自动同步到 Firebase
 ```
 
-**Claude.ai (网页)**:
+**Claude.ai / MCP Submit**:
 ```
-seedream_submit → 立即返回 → 后台生成 → 用户去 Web App 查看
-                                         ↓
-                     https://seedream-gallery.firebaseapp.com
+seedream_submit → 创建任务到 Firestore (status='pending')
+                           ↓
+        Cloud Function (processGenerationTask) 处理
+                           ↓
+        生成图片 → 上传 Storage → 更新任务状态
+                           ↓
+        前端通过 Firestore 实时订阅获取更新
+                           ↓
+        https://seedream-gallery.firebaseapp.com
 ```
 
 ### 关键设计
 
-**services/seedream.ts** - API 客户端:
+**v2.3.0 架构变更**:
+- `seedream_submit` 只创建任务，**不**自己处理
+- 所有任务由 Cloud Function 统一处理（避免竞态条件和 OOM）
+- MCP 和 Web App 使用相同的处理流程
+
+**services/seedream.ts** - API 客户端 (供 seedream_generate 等本地工具使用):
 - 流式响应处理 (`image_generation.partial_succeeded`)
+- 并行 API 调用（每个调用生成 1 张图片）
 - 并行下载（最多 4 张）
 - Base64 编码缓存（LRU, 5 分钟 TTL）
-- `skipFirebaseSync` 参数防止重复同步
 
 **services/firebase.ts** - Firebase 集成:
 - `syncImageToFirebase()` - 上传 Storage + 写入 `images` 集合
-- `createTaskWithId()` / `updateTaskStatus()` - 任务队列管理
+- `createTaskWithId()` - 创建任务记录（供 Cloud Function 处理）
 - 所有写入必须过滤 `undefined` 值（Firestore 限制）
 
-**tools/submit.ts** - Claude.ai 兼容:
-- 使用 `setImmediate()` 延迟后台处理
-- 立即返回任务 ID（< 100ms）
-- 后台完成生成和 Firebase 同步
+**tools/submit.ts** - Claude.ai 兼容 (v2.3.0):
+- 只创建任务到 Firestore，立即返回
+- Cloud Function 自动处理任务（9 分钟超时）
+- 更可靠、更简单、无 OOM 风险
 
 ## API 最佳实践
 

@@ -2,6 +2,11 @@
  * Async task submission tool
  * Submits generation request and returns immediately with task ID
  * Designed for Claude.ai compatibility (avoids timeout issues)
+ *
+ * Architecture:
+ * - MCP creates task in Firestore with status='pending'
+ * - Cloud Function (processGenerationTask) picks up and processes the task
+ * - MCP does NOT process tasks itself (avoids race conditions and OOM issues)
  */
 
 import {
@@ -11,13 +16,8 @@ import {
 } from "../schemas/index.js";
 import {
   createTaskWithId,
-  updateTaskStatus,
-  addTaskImage,
   isFirebaseConfigured,
-  syncImageToFirebase,
-  TaskImage,
 } from "../services/firebase.js";
-import { generateImages } from "../services/seedream.js";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 
 export function registerSubmitTool(server: McpServer): void {
@@ -63,144 +63,67 @@ Example:
             task_id: "",
             status: "error",
             message: "Firebase not configured",
-            check_command: "",
           },
           isError: true,
         };
       }
 
-      // Generate optimistic task ID immediately (don't wait for Firebase)
+      // Generate task ID (use mcp_ prefix to identify source)
       const taskId = `mcp_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 
-      // Return immediately, process everything in background
-      // This ensures Claude.ai doesn't timeout waiting for Firebase
-      setImmediate(() => {
-        processTaskWithFirebase(taskId, params).catch((error) => {
-          console.error(`[submit] Task ${taskId} failed:`, error);
+      try {
+        // Create task in Firestore with status='pending'
+        // Cloud Function (processGenerationTask) will pick it up and process it
+        await createTaskWithId(taskId, {
+          prompt: params.prompt,
+          mode: params.mode,
+          size: params.size,
+          strength: params.strength,
+          expectedCount: params.count,
         });
-      });
 
-      const output = {
-        success: true,
-        task_id: taskId,
-        status: "submitted",
-        message: `Task submitted! Generating ${params.count} image(s). View at https://seedream-gallery.firebaseapp.com`,
-      };
+        console.error(`[submit] Task ${taskId} created, Cloud Function will process it`);
 
-      const textContent = [
-        "# ✅ Task Submitted",
-        "",
-        `**Prompt:** ${params.prompt}`,
-        `**Images:** ${params.count}`,
-        "",
-        "Your images will be ready in **30-60 seconds**.",
-        "",
-        "👉 **View results:** https://seedream-gallery.firebaseapp.com",
-      ].join("\n");
+        const output = {
+          success: true,
+          task_id: taskId,
+          status: "submitted" as const,
+          message: `Task submitted! Generating ${params.count} image(s). View at https://seedream-gallery.firebaseapp.com`,
+        };
 
-      return {
-        content: [{ type: "text", text: textContent }],
-        structuredContent: output,
-      };
+        const textContent = [
+          "# ✅ Task Submitted",
+          "",
+          `**Prompt:** ${params.prompt}`,
+          `**Images:** ${params.count}`,
+          "",
+          "Your images will be ready in **30-60 seconds**.",
+          "",
+          "👉 **View results:** https://seedream-gallery.firebaseapp.com",
+        ].join("\n");
+
+        return {
+          content: [{ type: "text", text: textContent }],
+          structuredContent: output,
+        };
+
+      } catch (error) {
+        console.error(`[submit] Failed to create task ${taskId}:`, error);
+
+        return {
+          content: [{
+            type: "text",
+            text: `## Error: Failed to Submit Task\n\n${error instanceof Error ? error.message : String(error)}`
+          }],
+          structuredContent: {
+            success: false,
+            task_id: taskId,
+            status: "error" as const,
+            message: error instanceof Error ? error.message : String(error),
+          },
+          isError: true,
+        };
+      }
     }
   );
-}
-
-/**
- * Process task with Firebase - creates task record first, then generates images
- * This runs completely in background after response is sent
- */
-async function processTaskWithFirebase(
-  taskId: string,
-  params: SubmitInput
-): Promise<void> {
-  console.error(`[submit] Starting background processing for task ${taskId}`);
-
-  try {
-    // Step 1: Create task in Firebase (now in background, won't block response)
-    await createTaskWithId(taskId, {
-      prompt: params.prompt,
-      mode: params.mode,
-      size: params.size,
-      strength: params.strength,
-      expectedCount: params.count,
-    });
-    console.error(`[submit] Task ${taskId} created in Firebase`);
-
-    // Step 2: Update status to generating
-    await updateTaskStatus(taskId, "generating");
-
-    // Step 3: Generate images (skip auto Firebase sync, we handle it below)
-    const result = await generateImages(
-      {
-        prompt: params.prompt,
-        size: params.size,
-        batchCount: params.count,
-      },
-      true, // download
-      "./generated_images",
-      undefined, // onProgress
-      true // skipFirebaseSync - we sync manually to update task record
-    );
-
-    if (!result.success) {
-      await updateTaskStatus(taskId, "failed", {
-        error: result.error || "Generation failed",
-      });
-      return;
-    }
-
-    // Step 4: Process and save each image
-    for (let i = 0; i < result.images.length; i++) {
-      const img = result.images[i];
-      const imageId = `img_${Date.now()}_${i}`;
-
-      // Sync to Firebase Storage
-      let storageUrl: string | undefined;
-      if (img.localPath) {
-        const syncResult = await syncImageToFirebase(
-          img.url,
-          img.localPath,
-          params.prompt,
-          img.size,
-          params.mode
-        );
-        if (syncResult) {
-          storageUrl = syncResult.storageUrl;
-        }
-      }
-
-      // Build TaskImage object, excluding undefined fields (Firestore rejects undefined)
-      const taskImage: TaskImage = {
-        id: imageId,
-        url: img.url,
-        size: img.size,
-        status: "ready",
-        processedAt: Date.now(),
-      };
-      // Only add storageUrl if it exists
-      if (storageUrl) {
-        taskImage.storageUrl = storageUrl;
-      }
-
-      await addTaskImage(taskId, taskImage);
-    }
-
-    // Step 5: Mark task as completed
-    await updateTaskStatus(taskId, "completed", {
-      usage: result.usage,
-    });
-
-    console.error(`[submit] Task ${taskId} completed with ${result.images.length} images`);
-  } catch (error) {
-    console.error(`[submit] Task ${taskId} failed:`, error);
-    // Try to update task status if Firebase is available
-    try {
-      await updateTaskStatus(taskId, "failed", {
-        error: error instanceof Error ? error.message : String(error),
-      });
-    } catch {
-      // Ignore Firebase errors during error handling
-    }
-  }
 }
