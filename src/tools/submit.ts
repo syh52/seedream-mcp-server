@@ -34,13 +34,21 @@ This tool returns immediately after submitting the task.
 
 Args:
   - prompt (string, required): Description of the image to generate
-  - mode (string): 'text' (default), 'image' (editing), or 'multi' (blending)
+  - mode (string): 'text' (default), 'image' (editing with 1 ref image), or 'multi' (blending 2+ images)
   - size (string): Output size (default: '2K')
   - count (number): Number of images to generate (1-15, default: 4)
+  - strength (number): Reference strength 0-1 for image/multi modes (default: 0.7)
+  - images (string[]): Reference image URLs for 'image' or 'multi' modes
 
-Example:
-  User: "Generate a sunset over mountains"
-  Assistant: [calls seedream_submit] "Task submitted! Your images will be ready in about 30-60 seconds. View them at https://seedream-gallery.firebaseapp.com"`,
+**Modes:**
+  - 'text': Pure text-to-image generation (no reference images needed)
+  - 'image': Edit/transform a single reference image (requires 1 image URL)
+  - 'multi': Blend multiple images together (requires 2-14 image URLs)
+
+Examples:
+  - Text mode: { prompt: "A sunset over mountains", mode: "text" }
+  - Image mode: { prompt: "Make this photo look like an oil painting", mode: "image", images: ["https://...jpg"] }
+  - Multi mode: { prompt: "Dress the person in image 1 with outfit from image 2", mode: "multi", images: ["https://...1.jpg", "https://...2.jpg"] }`,
       inputSchema: SubmitInputSchema,
       outputSchema: SubmitOutputSchema,
       annotations: {
@@ -80,6 +88,7 @@ Example:
           size: params.size,
           strength: params.strength,
           expectedCount: params.count,
+          referenceImageUrls: params.images,
         });
 
         console.error(`[submit] Task ${taskId} created, Cloud Function will process it`);

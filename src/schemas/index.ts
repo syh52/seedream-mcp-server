@@ -191,7 +191,7 @@ export const SubmitInputSchema = z.object({
     .describe("Text description of the image to generate"),
   mode: z.enum(["text", "image", "multi"])
     .default("text")
-    .describe("Generation mode: 'text' for text-to-image, 'image' for editing, 'multi' for blending"),
+    .describe("Generation mode: 'text' for text-to-image, 'image' for editing (requires images), 'multi' for blending (requires 2+ images)"),
   size: ImageSize
     .describe("Output image size"),
   count: z.number()
@@ -204,7 +204,10 @@ export const SubmitInputSchema = z.object({
     .min(0)
     .max(1)
     .optional()
-    .describe("Reference strength for image/multi modes (0-1)"),
+    .describe("Reference strength for image/multi modes (0-1, default 0.7)"),
+  images: z.array(z.string())
+    .optional()
+    .describe("Reference image URLs for 'image' mode (1 image) or 'multi' mode (2-14 images). Required when mode is not 'text'."),
 }).strict();
 
 export type SubmitInput = z.infer<typeof SubmitInputSchema>;

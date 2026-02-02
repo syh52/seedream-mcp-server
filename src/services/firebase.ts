@@ -302,6 +302,7 @@ export async function createTaskWithId(
     size: string;
     strength?: number;
     expectedCount: number;
+    referenceImageUrls?: string[];
   }
 ): Promise<void> {
   const app = initFirebase();
@@ -323,9 +324,12 @@ export async function createTaskWithId(
     maxRetries: 2,
   };
 
-  // Only include strength if defined (Firestore doesn't allow undefined values)
+  // Only include optional fields if defined (Firestore doesn't allow undefined values)
   if (data.strength !== undefined) {
     taskData.strength = data.strength;
+  }
+  if (data.referenceImageUrls && data.referenceImageUrls.length > 0) {
+    taskData.referenceImageUrls = data.referenceImageUrls;
   }
 
   await db.collection(TASKS_COLLECTION).doc(taskId).set(taskData);
