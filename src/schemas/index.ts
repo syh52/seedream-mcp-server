@@ -183,7 +183,31 @@ export type VariationsInput = z.infer<typeof VariationsInputSchema>;
 
 // ==================== Async Task Schemas ====================
 
+// Helper: coerce string to number (Claude.ai sends numbers as strings)
+const coerceNumber = z.preprocess((val) => {
+  if (typeof val === "string") {
+    const num = parseFloat(val);
+    return isNaN(num) ? val : num;
+  }
+  return val;
+}, z.number());
+
+// Helper: coerce JSON string to array (Claude.ai sends arrays as JSON strings)
+const coerceStringArray = z.preprocess((val) => {
+  if (typeof val === "string") {
+    try {
+      const parsed = JSON.parse(val);
+      if (Array.isArray(parsed)) return parsed;
+    } catch {
+      // If not valid JSON, treat as single-item array
+      if (val.startsWith("http")) return [val];
+    }
+  }
+  return val;
+}, z.array(z.string()));
+
 // Submit task input (for Claude.ai compatibility - avoids timeout)
+// Note: Claude.ai may send numbers as strings and arrays as JSON strings
 export const SubmitInputSchema = z.object({
   prompt: z.string()
     .min(1, "Prompt is required")
@@ -194,18 +218,15 @@ export const SubmitInputSchema = z.object({
     .describe("Generation mode: 'text' for text-to-image, 'image' for editing (requires images), 'multi' for blending (requires 2+ images)"),
   size: ImageSize
     .describe("Output image size"),
-  count: z.number()
-    .int()
-    .min(1)
-    .max(15)
+  count: coerceNumber
+    .pipe(z.number().int().min(1).max(15))
     .default(4)
     .describe("Number of images to generate (1-15)"),
-  strength: z.number()
-    .min(0)
-    .max(1)
+  strength: coerceNumber
+    .pipe(z.number().min(0).max(1))
     .optional()
     .describe("Reference strength for image/multi modes (0-1, default 0.7)"),
-  images: z.array(z.string())
+  images: coerceStringArray
     .optional()
     .describe("Reference image URLs for 'image' mode (1 image) or 'multi' mode (2-14 images). Required when mode is not 'text'."),
 }).strict();
