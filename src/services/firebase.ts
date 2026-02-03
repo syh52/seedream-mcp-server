@@ -40,10 +40,16 @@ let firebaseApp: App | null = null;
  * 3. FIREBASE_SERVICE_ACCOUNT_PATH env var (path to JSON file)
  */
 function initFirebase(): App {
-  if (firebaseApp) return firebaseApp;
+  console.error("[firebase] initFirebase() called");
+
+  if (firebaseApp) {
+    console.error("[firebase] Returning cached firebaseApp");
+    return firebaseApp;
+  }
 
   // Check if already initialized
   if (getApps().length > 0) {
+    console.error("[firebase] Firebase already initialized, reusing existing app");
     firebaseApp = getApps()[0];
     return firebaseApp;
   }
@@ -52,6 +58,7 @@ function initFirebase(): App {
 
   // Method 1: GOOGLE_APPLICATION_CREDENTIALS (standard GCP approach)
   if (process.env.GOOGLE_APPLICATION_CREDENTIALS) {
+    console.error("[firebase] Using GOOGLE_APPLICATION_CREDENTIALS method");
     // Firebase Admin SDK will automatically use this
     firebaseApp = initializeApp({
       storageBucket: STORAGE_BUCKET,
@@ -62,19 +69,26 @@ function initFirebase(): App {
 
   // Method 2: FIREBASE_SERVICE_ACCOUNT (JSON string)
   if (process.env.FIREBASE_SERVICE_ACCOUNT) {
+    console.error("[firebase] Using FIREBASE_SERVICE_ACCOUNT method");
     try {
-      const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
+      const saValue = process.env.FIREBASE_SERVICE_ACCOUNT;
+      console.error(`[firebase] FIREBASE_SERVICE_ACCOUNT length: ${saValue.length}, starts with: ${saValue.slice(0, 50)}...`);
+      const serviceAccount = JSON.parse(saValue);
+      console.error(`[firebase] Parsed service account, project_id: ${serviceAccount.project_id}`);
       credential = cert(serviceAccount);
-      console.error("[firebase] Initialized with FIREBASE_SERVICE_ACCOUNT env var");
+      console.error("[firebase] Credential created successfully");
     } catch (e) {
+      console.error(`[firebase] ERROR: Failed to parse FIREBASE_SERVICE_ACCOUNT:`, e);
       throw new Error(`Failed to parse FIREBASE_SERVICE_ACCOUNT: ${e}`);
     }
   }
 
   // Method 3: FIREBASE_SERVICE_ACCOUNT_PATH (path to JSON file)
   if (!credential && process.env.FIREBASE_SERVICE_ACCOUNT_PATH) {
+    console.error("[firebase] Using FIREBASE_SERVICE_ACCOUNT_PATH method");
     const saPath = process.env.FIREBASE_SERVICE_ACCOUNT_PATH;
     if (!fs.existsSync(saPath)) {
+      console.error(`[firebase] ERROR: Service account file not found: ${saPath}`);
       throw new Error(`Service account file not found: ${saPath}`);
     }
     const serviceAccount = JSON.parse(fs.readFileSync(saPath, "utf-8"));
@@ -83,6 +97,7 @@ function initFirebase(): App {
   }
 
   if (!credential) {
+    console.error("[firebase] ERROR: No credentials available");
     throw new Error(
       "Firebase credentials not configured. Set one of:\n" +
       "  - GOOGLE_APPLICATION_CREDENTIALS (path to service account JSON)\n" +
@@ -91,10 +106,12 @@ function initFirebase(): App {
     );
   }
 
+  console.error("[firebase] Calling initializeApp with credential");
   firebaseApp = initializeApp({
     credential,
     storageBucket: STORAGE_BUCKET,
   });
+  console.error("[firebase] Firebase Admin SDK initialized successfully");
 
   return firebaseApp;
 }
@@ -206,11 +223,21 @@ export async function syncImageToFirebase(
  * Check if Firebase is configured
  */
 export function isFirebaseConfigured(): boolean {
-  return !!(
-    process.env.GOOGLE_APPLICATION_CREDENTIALS ||
-    process.env.FIREBASE_SERVICE_ACCOUNT ||
-    process.env.FIREBASE_SERVICE_ACCOUNT_PATH
-  );
+  const hasGAC = !!process.env.GOOGLE_APPLICATION_CREDENTIALS;
+  const hasSA = !!process.env.FIREBASE_SERVICE_ACCOUNT;
+  const hasSAPath = !!process.env.FIREBASE_SERVICE_ACCOUNT_PATH;
+
+  const configured = hasGAC || hasSA || hasSAPath;
+
+  // Log configuration status for debugging
+  console.error(`[firebase] isFirebaseConfigured check:`, {
+    GOOGLE_APPLICATION_CREDENTIALS: hasGAC ? `set (${process.env.GOOGLE_APPLICATION_CREDENTIALS?.length} chars)` : 'not set',
+    FIREBASE_SERVICE_ACCOUNT: hasSA ? `set (${process.env.FIREBASE_SERVICE_ACCOUNT?.length} chars)` : 'not set',
+    FIREBASE_SERVICE_ACCOUNT_PATH: hasSAPath ? `set (${process.env.FIREBASE_SERVICE_ACCOUNT_PATH})` : 'not set',
+    result: configured,
+  });
+
+  return configured;
 }
 
 // ==================== Task Queue Functions ====================
@@ -305,35 +332,53 @@ export async function createTaskWithId(
     referenceImageUrls?: string[];
   }
 ): Promise<void> {
-  const app = initFirebase();
-  const db = getFirestore(app);
-  const mcpUser = getMcpUser();
-
-  const taskData: Record<string, unknown> = {
-    userId: mcpUser.userId,
-    userName: mcpUser.userName,
-    status: "pending",
-    prompt: data.prompt,
+  console.error(`[firebase] createTaskWithId called with taskId: ${taskId}`);
+  console.error(`[firebase] Task data:`, {
     mode: data.mode,
     size: data.size,
     expectedCount: data.expectedCount,
-    images: [],
-    createdAt: Date.now(),
-    source: "mcp",
-    retryCount: 0,
-    maxRetries: 2,
-  };
+    hasReferenceImages: !!data.referenceImageUrls,
+    referenceImageCount: data.referenceImageUrls?.length || 0,
+  });
 
-  // Only include optional fields if defined (Firestore doesn't allow undefined values)
-  if (data.strength !== undefined) {
-    taskData.strength = data.strength;
-  }
-  if (data.referenceImageUrls && data.referenceImageUrls.length > 0) {
-    taskData.referenceImageUrls = data.referenceImageUrls;
-  }
+  try {
+    console.error(`[firebase] Initializing Firebase...`);
+    const app = initFirebase();
+    console.error(`[firebase] Getting Firestore...`);
+    const db = getFirestore(app);
+    const mcpUser = getMcpUser();
+    console.error(`[firebase] MCP User:`, mcpUser);
 
-  await db.collection(TASKS_COLLECTION).doc(taskId).set(taskData);
-  console.error(`[firebase] Created task with ID: ${taskId}`);
+    const taskData: Record<string, unknown> = {
+      userId: mcpUser.userId,
+      userName: mcpUser.userName,
+      status: "pending",
+      prompt: data.prompt,
+      mode: data.mode,
+      size: data.size,
+      expectedCount: data.expectedCount,
+      images: [],
+      createdAt: Date.now(),
+      source: "mcp",
+      retryCount: 0,
+      maxRetries: 2,
+    };
+
+    // Only include optional fields if defined (Firestore doesn't allow undefined values)
+    if (data.strength !== undefined) {
+      taskData.strength = data.strength;
+    }
+    if (data.referenceImageUrls && data.referenceImageUrls.length > 0) {
+      taskData.referenceImageUrls = data.referenceImageUrls;
+    }
+
+    console.error(`[firebase] Writing task to Firestore...`);
+    await db.collection(TASKS_COLLECTION).doc(taskId).set(taskData);
+    console.error(`[firebase] Task created successfully: ${taskId}`);
+  } catch (error) {
+    console.error(`[firebase] ERROR creating task ${taskId}:`, error);
+    throw error;
+  }
 }
 
 /**

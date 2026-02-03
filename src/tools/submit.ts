@@ -70,7 +70,11 @@ Examples:
       });
 
       // Check Firebase configuration
-      if (!isFirebaseConfigured()) {
+      const firebaseConfigured = isFirebaseConfigured();
+      console.error(`[submit] Firebase configured: ${firebaseConfigured}`);
+
+      if (!firebaseConfigured) {
+        console.error(`[submit] ERROR: Firebase not configured, cannot submit task`);
         return {
           content: [{
             type: "text",
