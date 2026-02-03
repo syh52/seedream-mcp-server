@@ -91,6 +91,18 @@ async function runHttp(): Promise<void> {
     next();
   });
 
+  // Fix Accept header for Claude.ai compatibility
+  // Claude.ai may not send the required "Accept: application/json, text/event-stream" header
+  // StreamableHTTPServerTransport requires this, so we add it if missing
+  app.use((req, _res, next) => {
+    const accept = req.headers.accept || "";
+    if (!accept.includes("text/event-stream")) {
+      req.headers.accept = "application/json, text/event-stream";
+      console.error(`[mcp] Fixed Accept header for request from ${req.ip}`);
+    }
+    next();
+  });
+
   // MCP handler - stateless, each request gets a fresh transport
   // This is the recommended approach for HTTP MCP servers
   async function handleMcpRequest(req: Request, res: Response) {
