@@ -80,6 +80,19 @@ async function runStdio(): Promise<void> {
  */
 async function runHttp(): Promise<void> {
   const app = express();
+
+  // CRITICAL: Fix Accept header BEFORE body parsing
+  // Claude.ai may not send the required "Accept: application/json, text/event-stream" header
+  // This must be done before any other middleware reads the headers
+  app.use((req, _res, next) => {
+    const accept = req.headers.accept || "";
+    if (!accept.includes("text/event-stream")) {
+      req.headers.accept = "application/json, text/event-stream";
+      console.error(`[mcp] Fixed Accept header for ${req.method} ${req.path}`);
+    }
+    next();
+  });
+
   app.use(express.json({ limit: "50mb" })); // Allow large base64 images
 
   // CORS for browser clients (including Claude.ai)
@@ -96,26 +109,6 @@ async function runHttp(): Promise<void> {
   // This is the recommended approach for HTTP MCP servers
   async function handleMcpRequest(req: Request, res: Response) {
     try {
-      // Fix Accept header for Claude.ai compatibility
-      // Claude.ai may not send the required "Accept: application/json, text/event-stream" header
-      // StreamableHTTPServerTransport requires this header
-      // We need to patch both req.headers and req.get() method
-      const originalAccept = req.headers.accept || "";
-      if (!originalAccept.includes("text/event-stream")) {
-        const fixedAccept = "application/json, text/event-stream";
-        req.headers.accept = fixedAccept;
-        // Also patch req.get() which Express uses internally
-        const originalGet = req.get.bind(req);
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        (req as any).get = (name: string) => {
-          if (name.toLowerCase() === "accept") {
-            return fixedAccept;
-          }
-          return originalGet(name);
-        };
-        console.error(`[mcp] Fixed Accept header for ${req.method} ${req.path}`);
-      }
-
       // Create new transport for each request (stateless mode)
       const transport = new StreamableHTTPServerTransport({
         sessionIdGenerator: undefined, // Stateless - no session tracking
