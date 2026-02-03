@@ -59,6 +59,16 @@ Examples:
       },
     },
     async (params: SubmitInput) => {
+      // Log received parameters for debugging
+      console.error(`[submit] Received params:`, {
+        prompt: params.prompt.slice(0, 50) + "...",
+        mode: params.mode,
+        size: params.size,
+        count: params.count,
+        hasImages: !!params.images,
+        imageCount: params.images?.length || 0,
+      });
+
       // Check Firebase configuration
       if (!isFirebaseConfigured()) {
         return {
@@ -76,6 +86,18 @@ Examples:
         };
       }
 
+      // Auto-detect mode based on images parameter
+      // This fixes the issue where Claude.ai might not set mode correctly
+      let effectiveMode = params.mode;
+      if (params.images && params.images.length > 0) {
+        if (params.mode === "text") {
+          // User provided images but mode is "text" (likely default)
+          // Auto-correct to appropriate mode
+          effectiveMode = params.images.length === 1 ? "image" : "multi";
+          console.error(`[submit] Auto-corrected mode from 'text' to '${effectiveMode}' based on ${params.images.length} image(s)`);
+        }
+      }
+
       // Generate task ID (use mcp_ prefix to identify source)
       const taskId = `mcp_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 
@@ -84,7 +106,7 @@ Examples:
         // Cloud Function (processGenerationTask) will pick it up and process it
         await createTaskWithId(taskId, {
           prompt: params.prompt,
-          mode: params.mode,
+          mode: effectiveMode,
           size: params.size,
           strength: params.strength,
           expectedCount: params.count,
