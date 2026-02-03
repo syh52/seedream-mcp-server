@@ -202,62 +202,58 @@ async function downloadImage(
 }
 
 /**
+ * Process items in batches with concurrency limit
+ */
+async function processInBatches<T, R>(
+  items: T[],
+  batchSize: number,
+  processor: (item: T) => Promise<R>
+): Promise<R[]> {
+  const results: R[] = [];
+  for (let i = 0; i < items.length; i += batchSize) {
+    const batch = items.slice(i, i + batchSize);
+    const batchResults = await Promise.all(batch.map(processor));
+    results.push(...batchResults);
+  }
+  return results;
+}
+
+/**
  * Download multiple images in parallel with concurrency limit
  */
 async function downloadImagesParallel(
   images: Array<{ url: string; size: string }>,
   downloadDir: string
 ): Promise<GeneratedImage[]> {
-  const results: GeneratedImage[] = [];
-  const queue = [...images.map((img, i) => ({ ...img, index: i + 1 }))];
-  const inProgress: Promise<void>[] = [];
+  const items = images.map((img, i) => ({ ...img, index: i + 1 }));
 
-  while (queue.length > 0 || inProgress.length > 0) {
-    // Fill up to max parallel downloads
-    while (queue.length > 0 && inProgress.length < CONFIG.MAX_PARALLEL_DOWNLOADS) {
-      const item = queue.shift()!;
-      const promise = (async () => {
-        try {
-          const { localPath, downloadTime } = await downloadImage(
-            item.url,
-            downloadDir,
-            item.index
-          );
-          results.push({
-            url: item.url,
-            size: item.size,
-            localPath,
-            downloadTime,
-          });
-        } catch (error) {
-          // Log but don't fail - include image without local path
-          console.error(`Failed to download image ${item.index}:`, error);
-          results.push({
-            url: item.url,
-            size: item.size,
-          });
-        }
-      })();
-      inProgress.push(promise);
-    }
-
-    // Wait for at least one to complete
-    if (inProgress.length > 0) {
-      await Promise.race(inProgress);
-      // Remove completed promises
-      for (let i = inProgress.length - 1; i >= 0; i--) {
-        const status = await Promise.race([
-          inProgress[i].then(() => "fulfilled"),
-          Promise.resolve("pending"),
-        ]);
-        if (status === "fulfilled") {
-          inProgress.splice(i, 1);
-        }
+  const results = await processInBatches(
+    items,
+    CONFIG.MAX_PARALLEL_DOWNLOADS,
+    async (item) => {
+      try {
+        const { localPath, downloadTime } = await downloadImage(
+          item.url,
+          downloadDir,
+          item.index
+        );
+        return {
+          url: item.url,
+          size: item.size,
+          localPath,
+          downloadTime,
+        };
+      } catch (error) {
+        // Log but don't fail - include image without local path
+        console.error(`Failed to download image ${item.index}:`, error);
+        return {
+          url: item.url,
+          size: item.size,
+        };
       }
     }
-  }
+  );
 
-  // Sort by index to maintain order
   return results;
 }
 
@@ -505,45 +501,28 @@ export async function generateImages(
       payload: { ...payload }, // Clone payload for each call
     }));
 
-    // Pipeline processing: generate + download in parallel with concurrency limit
-    // Each task completes generation then immediately downloads (no waiting for others)
-    const queue = [...apiTasks];
-    const inProgress: Promise<void>[] = [];
-
-    while (queue.length > 0 || inProgress.length > 0) {
-      // Fill up to max parallel API calls
-      while (queue.length > 0 && inProgress.length < CONFIG.MAX_PARALLEL_API_CALLS) {
-        const task = queue.shift()!;
-        const promise = (async () => {
-          // Pipeline: generate → download (immediate)
-          const result = await generateAndDownloadImage(
-            task.payload,
-            apiKey,
-            task.index,
-            downloadDir,
-            download,
-            onProgress
-          );
-          if (result) {
-            generatedImages.push(result);
-          }
-        })();
-        inProgress.push(promise);
+    // Pipeline processing: generate + download in batches
+    // Use processInBatches to control concurrency and avoid memory leaks
+    const batchResults = await processInBatches(
+      apiTasks,
+      CONFIG.MAX_PARALLEL_API_CALLS,
+      async (task) => {
+        // Pipeline: generate → download (immediate)
+        return await generateAndDownloadImage(
+          task.payload,
+          apiKey,
+          task.index,
+          downloadDir,
+          download,
+          onProgress
+        );
       }
+    );
 
-      // Wait for at least one to complete
-      if (inProgress.length > 0) {
-        await Promise.race(inProgress);
-        // Remove completed promises
-        for (let i = inProgress.length - 1; i >= 0; i--) {
-          const status = await Promise.race([
-            inProgress[i].then(() => "fulfilled"),
-            Promise.resolve("pending"),
-          ]);
-          if (status === "fulfilled") {
-            inProgress.splice(i, 1);
-          }
-        }
+    // Filter out null results (failed generations)
+    for (const result of batchResults) {
+      if (result) {
+        generatedImages.push(result);
       }
     }
 

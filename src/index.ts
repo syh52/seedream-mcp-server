@@ -1,11 +1,13 @@
 #!/usr/bin/env node
 /**
- * SeeDream MCP Server v2.4.0
+ * SeeDream MCP Server v2.5.0
  *
  * Enables Claude to generate images via natural language using SeeDream 4.5.
  *
- * IMPORTANT: This version uses a custom HTTP handler that bypasses the SDK's
- * StreamableHTTPServerTransport Accept header requirement for Claude.ai compatibility.
+ * v2.5.0 Changes:
+ * - Fixed critical Promise.race() memory leak bug in seedream.ts
+ * - Simplified HTTP handler: per-request transport for better isolation
+ * - Added Accept header middleware for Claude.ai compatibility
  */
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -20,8 +22,8 @@ import { registerVariationsTool } from "./tools/variations.js";
 import { registerStatusTool } from "./tools/status.js";
 import { registerSubmitTool } from "./tools/submit.js";
 
-// Server version - v2.4.0: Custom HTTP handler for Claude.ai compatibility
-const SERVER_VERSION = "2.4.0";
+// Server version - v2.5.0: Fixed memory leak, simplified HTTP handler
+const SERVER_VERSION = "2.5.0";
 
 // MCP Protocol version
 const MCP_PROTOCOL_VERSION = "2024-11-05";
@@ -51,94 +53,75 @@ async function runStdio(): Promise<void> {
 }
 
 /**
- * Custom HTTP MCP Handler
- * Bypasses StreamableHTTPServerTransport's Accept header requirement
- * Uses InMemoryTransport to communicate with the MCP server
+ * Handle a single MCP request with per-request transport isolation
+ * Creates a new InMemoryTransport pair for each request to avoid shared state issues
  */
-class HttpMcpHandler {
-  private clientTransport: InMemoryTransport | null = null;
-  private serverTransport: InMemoryTransport | null = null;
-  private isConnected = false;
-  private pendingRequests = new Map<string | number, {
-    resolve: (value: unknown) => void;
-    reject: (error: Error) => void;
-    timeout: NodeJS.Timeout;
-  }>();
+async function handleMcpRequest(body: unknown): Promise<unknown> {
+  const request = body as { id?: string | number; method?: string };
+  const requestId = request.id;
 
-  async ensureConnected(): Promise<void> {
-    if (this.isConnected) return;
+  // For notifications (no id), return empty response
+  if (requestId === undefined) {
+    return { jsonrpc: "2.0", result: {} };
+  }
 
-    // Create linked in-memory transports
-    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-    this.clientTransport = clientTransport;
-    this.serverTransport = serverTransport;
+  // Create a new linked transport pair for this request
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+
+  return new Promise(async (resolve, reject) => {
+    // Set up timeout
+    const timeout = setTimeout(() => {
+      clientTransport.close();
+      serverTransport.close();
+      reject(new Error(`Request timeout for ${request.method || "unknown"}`));
+    }, 300000); // 5 minute timeout
 
     // Set up message handler on client transport
     clientTransport.onmessage = (message: unknown) => {
       const msg = message as { id?: string | number };
-      if (msg.id !== undefined) {
-        const pending = this.pendingRequests.get(msg.id);
-        if (pending) {
-          clearTimeout(pending.timeout);
-          this.pendingRequests.delete(msg.id);
-          pending.resolve(message);
-        }
+      if (msg.id !== undefined && msg.id === requestId) {
+        clearTimeout(timeout);
+        resolve(message);
+        // Clean up transports after response
+        clientTransport.close();
+        serverTransport.close();
       }
     };
 
-    // Connect server to its transport
-    await server.connect(serverTransport);
+    try {
+      // Connect server to this request's transport
+      await server.connect(serverTransport);
+      await clientTransport.start();
 
-    // Start the client transport
-    await clientTransport.start();
-
-    this.isConnected = true;
-    console.error("[mcp] HTTP handler connected to MCP server");
-  }
-
-  async handleRequest(body: unknown): Promise<unknown> {
-    await this.ensureConnected();
-
-    if (!this.clientTransport) {
-      throw new Error("Transport not initialized");
+      // Send the request
+      await clientTransport.send(body as Parameters<typeof clientTransport.send>[0]);
+    } catch (err) {
+      clearTimeout(timeout);
+      clientTransport.close();
+      serverTransport.close();
+      reject(err);
     }
-
-    const request = body as { id?: string | number; method?: string };
-    const requestId = request.id;
-
-    // For notifications (no id), just send and return empty
-    if (requestId === undefined) {
-      await this.clientTransport.send(body as Parameters<typeof this.clientTransport.send>[0]);
-      return { jsonrpc: "2.0", result: {} };
-    }
-
-    return new Promise((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        this.pendingRequests.delete(requestId);
-        reject(new Error(`Request timeout for ${request.method || "unknown"}`));
-      }, 300000); // 5 minute timeout
-
-      this.pendingRequests.set(requestId, { resolve, reject, timeout });
-
-      this.clientTransport!.send(body as Parameters<typeof this.clientTransport.send>[0]).catch((err) => {
-        clearTimeout(timeout);
-        this.pendingRequests.delete(requestId);
-        reject(err);
-      });
-    });
-  }
+  });
 }
 
 /**
  * Run server with HTTP transport (remote server mode)
- * Custom implementation that bypasses Accept header requirements
+ * Uses per-request transport isolation for better concurrency handling
  */
 async function runHttp(): Promise<void> {
   const app = express();
-  const mcpHandler = new HttpMcpHandler();
 
   // Parse JSON body with large limit for base64 images
   app.use(express.json({ limit: "50mb" }));
+
+  // Accept header middleware - ensures Claude.ai compatibility
+  // SDK requires Accept: application/json, text/event-stream
+  app.use((req, _res, next) => {
+    if (!req.headers.accept?.includes("text/event-stream")) {
+      req.headers.accept = "application/json, text/event-stream";
+    }
+    next();
+  });
 
   // CORS for browser clients
   app.use((_req, res, next) => {
@@ -154,7 +137,7 @@ async function runHttp(): Promise<void> {
     res.status(204).end();
   });
 
-  // MCP POST handler - custom implementation
+  // MCP POST handler - per-request transport isolation
   async function handleMcpPost(req: Request, res: Response) {
     const startTime = Date.now();
 
@@ -165,8 +148,8 @@ async function runHttp(): Promise<void> {
         accept: req.headers.accept,
       });
 
-      // Handle the MCP request
-      const response = await mcpHandler.handleRequest(req.body);
+      // Handle the MCP request with isolated transport
+      const response = await handleMcpRequest(req.body);
 
       console.error(`[mcp] Response in ${Date.now() - startTime}ms`);
 
@@ -254,7 +237,8 @@ async function runHttp(): Promise<void> {
     console.log(`  - Health check: http://localhost:${port}/health`);
     console.log(`  - Protocol:     MCP ${MCP_PROTOCOL_VERSION}`);
     console.log(`  - API Key:      ${process.env.ARK_API_KEY ? "configured" : "NOT SET"}`);
-    console.log(`  - Custom HTTP handler: Accept header NOT required`);
+    console.log(`  - Per-request transport isolation enabled`);
+    console.log(`  - Accept header auto-injection enabled`);
   });
 }
 
