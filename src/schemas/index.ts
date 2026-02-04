@@ -103,7 +103,7 @@ export const GenerateInputSchema = BaseInputSchema.extend({
     .max(2000, "Prompt must not exceed 2000 characters")
     .describe("Text description of the image to generate. Be specific about subject, style, lighting, composition."),
   size: ImageSize
-    .describe("Output image size: '2K' (recommended), '4K' (high-res), or aspect ratios like '16:9', '9:16', '1:1'"),
+    .describe("Output image size: '2K' (default), '4K', '4K-9:16' (2304x4096 high-res vertical), or aspect ratios: '1:1', '4:3', '3:4', '16:9', '9:16', '3:2', '2:3', '21:9'"),
   watermark: z.boolean()
     .default(false)
     .describe("Whether to add 'AI generated' watermark"),

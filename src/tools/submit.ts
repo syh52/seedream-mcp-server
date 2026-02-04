@@ -35,7 +35,7 @@ This tool returns immediately after submitting the task.
 Args:
   - prompt (string, required): Description of the image to generate
   - mode (string): 'text' (default), 'image' (editing with 1 ref image), or 'multi' (blending 2+ images)
-  - size (string): Output size (default: '2K')
+  - size (string): '2K' (default), '4K', '4K-9:16' (2304x4096), or aspect ratios: '1:1', '4:3', '3:4', '16:9', '9:16', '3:2', '2:3', '21:9'
   - count (number): Number of images to generate (1-15, default: 4)
   - strength (number): Reference strength 0-1 for image/multi modes (default: 0.7)
   - images (string[]): Reference image URLs for 'image' or 'multi' modes
