@@ -16,6 +16,7 @@ export const ImageSize = z.enum([
   "3:4",     // 1728x2304 - Portrait
   "16:9",    // 2560x1440 - Widescreen
   "9:16",    // 1440x2560 - Vertical/Mobile
+  "4K-9:16", // 2304x4096 - 4K Vertical/Mobile
   "3:2",     // 2496x1664 - Classic photo
   "2:3",     // 1664x2496 - Portrait photo
   "21:9",    // 3024x1296 - Ultra-wide
