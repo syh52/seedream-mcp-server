@@ -1,12 +1,7 @@
 /**
  * Async task submission tool
- * Submits generation request and returns immediately with task ID
- * Designed for Claude.ai compatibility (avoids timeout issues)
- *
- * Architecture:
- * - MCP creates task in Firestore with status='pending'
- * - Cloud Function (processGenerationTask) picks up and processes the task
- * - MCP does NOT process tasks itself (avoids race conditions and OOM issues)
+ * Submits generation request and returns immediately with entry ID
+ * Cloud Function (processGenerationTask) handles the actual generation.
  */
 
 import {
@@ -15,7 +10,7 @@ import {
   SubmitOutputSchema,
 } from "../schemas/index.js";
 import {
-  createTaskWithId,
+  createEntryForProcessing,
   isFirebaseConfigured,
 } from "../services/firebase.js";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -40,15 +35,9 @@ Args:
   - strength (number): Reference strength 0-1 for image/multi modes (default: 0.7)
   - images (string[]): Reference image URLs for 'image' or 'multi' modes
 
-**Modes:**
-  - 'text': Pure text-to-image generation (no reference images needed)
-  - 'image': Edit/transform a single reference image (requires 1 image URL)
-  - 'multi': Blend multiple images together (requires 2-14 image URLs)
-
 Examples:
   - Text mode: { prompt: "A sunset over mountains", mode: "text" }
-  - Image mode: { prompt: "Make this photo look like an oil painting", mode: "image", images: ["https://...jpg"] }
-  - Multi mode: { prompt: "Dress the person in image 1 with outfit from image 2", mode: "multi", images: ["https://...1.jpg", "https://...2.jpg"] }`,
+  - Image mode: { prompt: "Make this photo look like an oil painting", mode: "image", images: ["https://...jpg"] }`,
       inputSchema: SubmitInputSchema,
       outputSchema: SubmitOutputSchema,
       annotations: {
@@ -59,7 +48,6 @@ Examples:
       },
     },
     async (params: SubmitInput) => {
-      // Log received parameters for debugging
       console.error(`[submit] Received params:`, {
         prompt: params.prompt.slice(0, 50) + "...",
         mode: params.mode,
@@ -69,20 +57,15 @@ Examples:
         imageCount: params.images?.length || 0,
       });
 
-      // Check Firebase configuration
-      const firebaseConfigured = isFirebaseConfigured();
-      console.error(`[submit] Firebase configured: ${firebaseConfigured}`);
-
-      if (!firebaseConfigured) {
-        console.error(`[submit] ERROR: Firebase not configured, cannot submit task`);
+      if (!isFirebaseConfigured()) {
         return {
           content: [{
             type: "text",
-            text: "## Error: Firebase Not Configured\n\nThe async task system requires Firebase. Please configure Firebase credentials."
+            text: "## Error: Firebase Not Configured\n\nThe async task system requires Firebase."
           }],
           structuredContent: {
             success: false,
-            task_id: "",
+            entry_id: "",
             status: "error",
             message: "Firebase not configured",
           },
@@ -90,25 +73,17 @@ Examples:
         };
       }
 
-      // Auto-detect mode based on images parameter
-      // This fixes the issue where Claude.ai might not set mode correctly
+      // Auto-detect mode based on images
       let effectiveMode = params.mode;
-      if (params.images && params.images.length > 0) {
-        if (params.mode === "text") {
-          // User provided images but mode is "text" (likely default)
-          // Auto-correct to appropriate mode
-          effectiveMode = params.images.length === 1 ? "image" : "multi";
-          console.error(`[submit] Auto-corrected mode from 'text' to '${effectiveMode}' based on ${params.images.length} image(s)`);
-        }
+      if (params.images && params.images.length > 0 && params.mode === "text") {
+        effectiveMode = params.images.length === 1 ? "image" : "multi";
+        console.error(`[submit] Auto-corrected mode to '${effectiveMode}'`);
       }
 
-      // Generate task ID (use mcp_ prefix to identify source)
-      const taskId = `mcp_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+      const entryId = `mcp_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 
       try {
-        // Create task in Firestore with status='pending'
-        // Cloud Function (processGenerationTask) will pick it up and process it
-        await createTaskWithId(taskId, {
+        await createEntryForProcessing(entryId, {
           prompt: params.prompt,
           mode: effectiveMode,
           size: params.size,
@@ -117,24 +92,24 @@ Examples:
           referenceImageUrls: params.images,
         });
 
-        console.error(`[submit] Task ${taskId} created, Cloud Function will process it`);
+        console.error(`[submit] Entry ${entryId} created`);
 
         const output = {
           success: true,
-          task_id: taskId,
+          entry_id: entryId,
           status: "submitted" as const,
           message: `Task submitted! Generating ${params.count} image(s). View at https://seedream-gallery.firebaseapp.com`,
         };
 
         const textContent = [
-          "# ✅ Task Submitted",
+          "# Task Submitted",
           "",
           `**Prompt:** ${params.prompt}`,
           `**Images:** ${params.count}`,
           "",
           "Your images will be ready in **30-60 seconds**.",
           "",
-          "👉 **View results:** https://seedream-gallery.firebaseapp.com",
+          "View results: https://seedream-gallery.firebaseapp.com",
         ].join("\n");
 
         return {
@@ -143,7 +118,7 @@ Examples:
         };
 
       } catch (error) {
-        console.error(`[submit] Failed to create task ${taskId}:`, error);
+        console.error(`[submit] Failed to create entry ${entryId}:`, error);
 
         return {
           content: [{
@@ -152,7 +127,7 @@ Examples:
           }],
           structuredContent: {
             success: false,
-            task_id: taskId,
+            entry_id: entryId,
             status: "error" as const,
             message: error instanceof Error ? error.message : String(error),
           },

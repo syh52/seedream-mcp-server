@@ -237,7 +237,7 @@ export type SubmitInput = z.infer<typeof SubmitInputSchema>;
 // Submit task output
 export const SubmitOutputSchema = z.object({
   success: z.boolean().describe("Whether the task was submitted successfully"),
-  task_id: z.string().describe("Task ID for internal tracking"),
+  entry_id: z.string().describe("Entry ID for internal tracking"),
   status: z.enum(["submitted", "error"]).describe("Task status: 'submitted' on success, 'error' on failure"),
   message: z.string().describe("Confirmation message or error description"),
 });
