@@ -24,6 +24,9 @@ export function registerEditTool(server: McpServer): void {
       title: "Edit Image",
       description: `Edit an existing image based on text instructions using SeeDream 4.5.
 
+⚠️ **CLAUDE.AI USERS**: This tool WILL TIMEOUT on Claude.ai (takes 20-40 seconds).
+   Use "seedream_submit" instead with mode="image" for Claude.ai compatibility.
+
 Use this tool to modify, enhance, or transform an existing image. Supports:
 - **Addition**: Add elements (accessories, objects, background elements)
 - **Deletion**: Remove unwanted elements

@@ -24,6 +24,9 @@ export function registerVariationsTool(server: McpServer): void {
       title: "Generate Image Variations",
       description: `Generate multiple variations of an image concept using SeeDream 4.5.
 
+⚠️ **CLAUDE.AI USERS**: This tool WILL TIMEOUT on Claude.ai (takes 30-90 seconds).
+   Use "seedream_submit" instead for Claude.ai compatibility.
+
 Use this tool to create 2-15 coherent variations based on a prompt. Great for:
 - **A/B testing**: Generate multiple options to compare
 - **Storyboards**: Create a series of related images

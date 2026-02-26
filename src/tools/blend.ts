@@ -24,6 +24,9 @@ export function registerBlendTool(server: McpServer): void {
       title: "Blend Multiple Images",
       description: `Combine elements from multiple images using SeeDream 4.5.
 
+⚠️ **CLAUDE.AI USERS**: This tool WILL TIMEOUT on Claude.ai (takes 30-60 seconds).
+   Use "seedream_submit" instead with mode="multi" for Claude.ai compatibility.
+
 Use this tool to blend 2-14 reference images together. Perfect for:
 - **Virtual try-on**: Dress person from image 1 in clothes from image 2
 - **Face/Subject swap**: Put face/subject from image 1 onto body/scene in image 2

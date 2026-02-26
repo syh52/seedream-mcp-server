@@ -18,7 +18,7 @@ import { syncImageToFirebase, isFirebaseConfigured } from "./firebase.js";
 
 // SeeDream API configuration
 const API_ENDPOINT = "https://ark.ap-southeast.bytepluses.com/api/v3/images/generations";
-const MODEL_ID = "seedream-4-5-251128"; // Latest Seedream 4.5 model
+const MODEL_ID = "ep-20260226145427-hdhqc"; // SeeDream 5.0-lite custom endpoint (content filter disabled)
 
 // Performance configuration
 // Note: Keep concurrency low to avoid OOM on Railway (512MB memory limit)
@@ -44,21 +44,21 @@ export type ProgressCallback = (event: {
 
 // Map user-friendly size names to API format
 // Reference: https://docs.byteplus.com/en/docs/ModelArk/1541523
-// Note: "1K" is only supported by Seedream 4.0, not 4.5
+// Note: "1K" is not supported by Seedream 5.0-lite
 const SIZE_MAP: Record<string, string> = {
   // Preset resolutions (recommended)
   "2K": "2K",      // Recommended default
   "4K": "4K",      // High resolution (50-100% slower)
-  // Aspect ratios with optimal pixel dimensions
+  // Aspect ratios with optimal pixel dimensions (SeeDream 5.0-lite)
   "1:1": "2048x2048",
   "4:3": "2304x1728",
   "3:4": "1728x2304",
-  "16:9": "2560x1440",
-  "9:16": "1440x2560",
-  "4K-9:16": "2304x4096",  // 4K vertical (9.4M pixels)
+  "16:9": "2848x1600",
+  "9:16": "1600x2848",
+  "4K-9:16": "3040x5504",  // 4K vertical
   "3:2": "2496x1664",
   "2:3": "1664x2496",
-  "21:9": "3024x1296",  // Ultra-wide
+  "21:9": "3136x1344",  // Ultra-wide
 };
 
 // Simple LRU cache for base64 encoded images
